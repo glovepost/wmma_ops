@@ -55,36 +55,43 @@ This represents a **4× improvement** over the initial implementation (5.4 → 2
 
 **rocBLAS achieves 69% of peak (41/59.4 TFLOPS) while our kernel achieves 36% of peak.**
 
-### Kernel Variant Comparison
+### Kernel Variant Comparison (4096×4096×2048)
 
-#### Working Kernels (All Correctness Tests Pass)
+All 12 kernel variants pass correctness tests (< 1% relative error):
 
-| Kernel | Small (512) | Medium (1024) | Large (2048) | XLarge (4096) | Average | % of Peak |
-|--------|-------------|---------------|--------------|---------------|---------|-----------|
-| **Adaptive** | 10.13 | 15.98 | 20.30 | 21.17 | **16.89** | 28.4% |
-| **Standard** | 14.05 | 11.16 | 20.08 | 21.88 | **16.79** | 28.3% |
-| **K-Unroll** | 12.60 | 15.73 | 18.97 | 17.19 | **16.12** | 27.1% |
-| **NoPrefetch** | 10.87 | 10.89 | 16.24 | 19.20 | **14.30** | 24.1% |
-| **Hilbert** | - | - | - | 12.97 | - | 21.8% |
-| **HighOcc** | 7.02 | 6.39 | 9.45 | 9.79 | **8.16** | 13.7% |
+| Kernel | Time (ms) | TFLOPS | % of Peak | Status |
+|--------|-----------|--------|-----------|--------|
+| **matmul_zerocopy** | 3.33 | **20.61** | 34.7% | ✅ Best |
+| **matmul_adaptive** | 3.35 | 20.52 | 34.5% | ✅ |
+| **matmul_asmOpt** | 3.35 | 20.49 | 34.5% | ✅ |
+| **matmul** | 3.36 | 20.46 | 34.4% | ✅ |
+| **matmul_native** | 3.45 | 19.92 | 33.5% | ✅ |
+| **matmul_kunroll** | 3.75 | 18.31 | 30.8% | ✅ |
+| **matmul_swizzled** | 3.84 | 17.90 | 30.1% | ✅ |
+| **matmul_noPrefetch** | 3.90 | 17.60 | 29.6% | ✅ |
+| **matmul_xor_optimized** | 3.98 | 17.26 | 29.1% | ✅ |
+| **matmul_quad** | 4.04 | 17.01 | 28.6% | ✅ |
+| **matmul_hilbert** | 5.16 | 13.33 | 22.4% | ✅ |
+| **matmul_highOcc** | 6.68 | 10.28 | 17.3% | ✅ |
+| **PyTorch (reference)** | 1.92 | 35.86 | 60.4% | — |
 
 **Peak Theoretical**: 59.4 TFLOPS (gfx1151 FP16 WMMA)
 
 #### Key Findings
 
-1. **Adaptive kernel performs best overall** (16.89 TFLOPS avg)
-   - Automatically selects optimal tile configuration
-   - Best for medium (1024) and large (2048) matrices
+1. **matmul_zerocopy performs best** (20.61 TFLOPS, 57.5% of PyTorch)
+   - Swizzled B matrix with zero-copy stores
+   - Best for large matrices
 
-2. **Standard kernel is most consistent** (16.79 TFLOPS avg)
-   - Best for small (512) and very large (4096) matrices
-   - Reliable performance across all sizes
+2. **Top 4 kernels are within 1%** of each other (~20.5 TFLOPS)
+   - zerocopy, adaptive, asmOpt, standard all perform similarly
+   - Use `matmul_adaptive` for automatic selection
 
-3. **K-Unroll shows promise for medium matrices** (15.73 TFLOPS at 1024)
-   - Reduces synchronization overhead
-   - Currently integrated into adaptive selector
+3. **XOR swizzle kernels now work correctly**
+   - `matmul_swizzled` and `matmul_xor_optimized` both pass
+   - Fixed fragment loading pattern (load ROW, not column)
 
-4. **HighOcc underperforms** (8.16 TFLOPS avg)
+4. **HighOcc underperforms** (10.28 TFLOPS)
    - Lower register pressure doesn't compensate for reduced compute intensity
    - Not recommended for current workloads
 
@@ -94,54 +101,13 @@ All correctness tests pass with acceptable FP16 precision:
 
 | Test | Relative Error | Status |
 |------|----------------|--------|
-| 512×512×64 | < 0.1% | ✅ |
-| 2048×2048×128 | < 0.1% | ✅ |
-| 4096×4096×2048 | < 0.1% | ✅ |
+| 512×512×64 | < 0.04% | ✅ |
+| 2048×2048×128 | < 0.03% | ✅ |
+| 4096×4096×2048 | < 0.03% | ✅ |
 | GEMM α=2.0, β=0.5 | < 0.001% | ✅ |
 | GEMM in-place | < 0.001% | ✅ |
 
-### Kernels with Known Issues
-
-**Swizzled (XOR) Kernel**
-- **Status**: ❌ FAIL (99.74% relative error)
-- **Issue**: Fragment loading/storing pattern doesn't match WMMA layout requirements.
-- **Symptom**: Extremely high TFLOPS (5000+) but garbage output.
-- **Root Cause**: Almost certainly a **packing/ABI mismatch** between manual fragment construction and intrinsic requirements. Inverting the XOR swizzle only fixes the indexing; it does not guarantee the correct lane-to-register mapping for the `half16` ABI.
-- **Recommendation**: Transition to vector-granularity swizzling (16B chunks) and use proven-good helper paths (`load_matrix_sync_lds`) for fragment construction.
-
-**ASM-Opt Kernel**  
-- **Status**: ❌ FAIL (40-54% relative error)
-- **Issue**: Incorrect fragment loading pattern.
-- **Root Cause**: Functional mismatch in manual register packing. While indexing may appear correct, the hardware expects a very specific bit-layout in the 8 VGPR pairs that manual `_Float16` loops often miss.
-- **Fix Path**: Re-align with the helper-based fragment loading pipeline used by the standard kernel.
-
 ---
-
-## XOR Swizzle Debugging Checklist
-
-To avoid guesswork when debugging swizzle or fragment layout issues, follow this isolation sequence:
-
-1. **Deterministic A/B Patterns**
-   - `A[row,col] = row*256 + col`
-   - `B[row,col] = row*256 + col + 0.25` (to distinguish from A)
-2. **Roundtrip Kernel**
-   - Write A into LDS using your swizzled addressing, read back using the inverse swizzle, and write to global.
-   - If this fails, the inversion math is wrong (independent of WMMA).
-3. **Fragment-Dump Kernel (No MMA)**
-   - Load A operand fragment exactly as the MMA kernel would.
-   - Write fragment data to global in canonical `[tile_row][tile_col]` view.
-   - Catches lane replication or "which lane owns which col/row" mismatches.
-4. **Epilogue-Dump Kernel (No Operand Loads)**
-   - Initialize accumulator registers to a known pattern (e.g., `acc[i] = i + lane*0.01`).
-   - Run epilogue store and validate the resulting matrix against expected row/col mapping.
-   - If this fails, your store mapping is wrong.
-
-### Layout Probe Test (Guardrail)
-
-To institutionalize correctness, use a **Deterministic Layout Probe**:
-- Use A/B patterns where the result C tile has a distinct structure (e.g., 0/120/240 row ramps).
-- This catches transposes, lane mapping errors, and packing mismatches that subtle floating-point errors might hide.
-- **CI Gating**: Every kernel variant (including adaptive selections) must pass this probe at small sizes before benchmarking.
 
 ## Building
 
@@ -236,6 +202,11 @@ print(f"Max error: {(C - C_ref).abs().max().item()}")
 | `wmma_ops.matmul_highOcc(A, B)` | High-occupancy variant |
 | `wmma_ops.matmul_quad(A, B)` | Quad-buffered variant |
 | `wmma_ops.matmul_native(A, B)` | gfx1151-specific with explicit intrinsics |
+| `wmma_ops.matmul_zerocopy(A, B)` | Swizzled B with zero-copy stores (fastest) |
+| `wmma_ops.matmul_asmOpt(A, B)` | Assembly-optimized scheduling hints |
+| `wmma_ops.matmul_hilbert(A, B)` | Hilbert curve tile mapping for L2 locality |
+| `wmma_ops.matmul_swizzled(A, B)` | XOR-swizzled LDS (bank conflict-free) |
+| `wmma_ops.matmul_xor_optimized(A, B)` | Optimized XOR swizzle variant |
 
 #### BLAS-Style GEMM (C = α × A × B + β × C)
 
@@ -350,8 +321,8 @@ For detailed information on fragment layouts, see [docs/wmma_fragment_layout_rdn
 
 **Key Points:**
 - **RDNA3 WMMA requires lane replication**: lanes 0-15 and lanes 16-31 must contain identical data for A and B fragments
-- **A Matrix**: Column-major format, each lane loads one column
-- **B Matrix**: Transposed layout in LDS, each lane loads one row of transposed B
+- **A Matrix**: Each lane loads one **ROW** of A (all 16 K values)
+- **B Matrix**: Transposed layout in LDS, each lane loads one **ROW** of transposed B (= one column of original B)
 - **C/D Matrix**: Row-major format, lanes 0-15 cover even rows, lanes 16-31 cover odd rows
 
 ---
@@ -499,7 +470,7 @@ Where `f(row)` is chosen such that threads accessing different rows but same log
 - XOR Swizzle: 12,288 bytes
 - **Savings: 6,144 bytes (33%)**
 
-**Status**: Implemented in `wmma_optimizations.hpp` but currently has correctness issues with fragment loading. Needs debugging before production use.
+**Status**: ✅ Implemented and working in `wmma_xor_swizzle.hpp`. Fixed fragment loading pattern to load ROW (all K values) instead of COLUMN.
 
 #### Critical Implementation Fixes for XOR Swizzle
 
