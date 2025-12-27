@@ -1071,6 +1071,245 @@ __global__ void wmma_gemm_kernel_hilbert(
 template __global__ void wmma_gemm_kernel_hilbert<8, 4, 2>(
     const __half*, const __half*, float*, int, int, int, int, int);
 
+
+// =============================================================================
+// COOPERATIVE LOADING KERNEL
+// 
+// Optimization: Split threads into two halves - first half loads A, second half
+// loads B simultaneously. This maximizes parallelism during the LDS loading phase.
+//
+// Benefits:
+// - A and B loaded in parallel (not sequentially)
+// - Better thread utilization during load phase
+// - Reduced effective load latency
+// =============================================================================
+
+template<int NWARPS, int WARPS_M_PARAM, int WARPS_N_PARAM>
+__launch_bounds__(NWARPS * 32, 2)
+__attribute__((amdgpu_waves_per_eu(4, 8)))
+__global__ void wmma_gemm_kernel_coop(
+    const __half* __restrict__ A, 
+    const __half* __restrict__ B, 
+    float* __restrict__ C,
+    const int M, const int N, const int K
+) {
+    constexpr int WMMA_M = 16;
+    constexpr int WMMA_N = 16;
+    constexpr int WMMA_K = 16;
+    constexpr int WARP_SIZE = 32;
+    
+    constexpr int WARPS_M = WARPS_M_PARAM;
+    constexpr int WARPS_N = WARPS_N_PARAM;
+    constexpr int WARP_TILE_M = 2 * WMMA_M;  // 32
+    constexpr int WARP_TILE_N = 2 * WMMA_N;  // 32
+    
+    constexpr int BLOCK_M = WARPS_M * WARP_TILE_M;  // 128 for 4 warps
+    constexpr int BLOCK_N = WARPS_N * WARP_TILE_N;  // 64 for 2 warps
+    constexpr int BLOCK_K = WMMA_K;                  // 16
+    
+    constexpr int A_STRIDE = BLOCK_K + LDS_PAD;  // 24
+    constexpr int B_STRIDE = BLOCK_K + LDS_PAD;  // 24
+    
+    __shared__ __half A_lds[2][BLOCK_M][A_STRIDE];
+    __shared__ __half B_lds[2][BLOCK_N][B_STRIDE];
+    
+    const int tid = threadIdx.x;
+    const int warp_id = tid / WARP_SIZE;
+    const int lane_id = tid % WARP_SIZE;
+    
+    const int warp_m = warp_id / WARPS_N;
+    const int warp_n = warp_id % WARPS_N;
+    const int warp_m_base = warp_m * WARP_TILE_M;
+    const int warp_n_base = warp_n * WARP_TILE_N;
+    
+    const int block_m = blockIdx.y * BLOCK_M;
+    const int block_n = blockIdx.x * BLOCK_N;
+    
+    if (block_m >= M || block_n >= N) return;
+    
+    const bool warp_active = (block_m + warp_m_base < M) && (block_n + warp_n_base < N);
+    
+    // Accumulators
+    fragment<accumulator, WMMA_M, WMMA_N, WMMA_K, float> c_frag[2][2];
+    #pragma unroll
+    for (int i = 0; i < 2; i++)
+        #pragma unroll
+        for (int j = 0; j < 2; j++)
+            fill_fragment(c_frag[i][j], 0.0f);
+    
+    // ========================================================================
+    // COOPERATIVE LOADING: Split threads into A-loaders and B-loaders
+    // 256 threads total: 128 load A, 128 load B
+    // ========================================================================
+    constexpr int NUM_THREADS = NWARPS * WARP_SIZE;  // 256
+    constexpr int HALF_THREADS = NUM_THREADS / 2;     // 128
+    
+    const bool is_a_loader = (tid < HALF_THREADS);
+    const int coop_tid = tid % HALF_THREADS;  // Local thread ID within A or B group
+    
+    // A loading: 128 threads load 128×16 = 2048 halfs = 256 half8 vectors
+    // Each of 128 threads loads 2 half8 vectors
+    constexpr int A_VECS_TOTAL = BLOCK_M * BLOCK_K / 8;  // 256
+    constexpr int A_VECS_PER_THREAD = A_VECS_TOTAL / HALF_THREADS;  // 2
+    
+    // B loading: 128 threads load 16×64 = 1024 halfs = 128 half8 vectors
+    // Each of 128 threads loads 1 half8 vector
+    constexpr int B_VECS_TOTAL = BLOCK_K * BLOCK_N / 8;  // 128
+    constexpr int B_VECS_PER_THREAD = B_VECS_TOTAL / HALF_THREADS;  // 1
+    
+    // Pre-compute load indices
+    int a_row[A_VECS_PER_THREAD], a_col[A_VECS_PER_THREAD];
+    bool a_valid[A_VECS_PER_THREAD];
+    
+    if (is_a_loader) {
+        #pragma unroll
+        for (int v = 0; v < A_VECS_PER_THREAD; v++) {
+            const int vec_idx = coop_tid * A_VECS_PER_THREAD + v;
+            a_row[v] = vec_idx / (BLOCK_K / 8);
+            a_col[v] = (vec_idx % (BLOCK_K / 8)) * 8;
+            a_valid[v] = (block_m + a_row[v] < M);
+        }
+    }
+    
+    int b_k, b_n;
+    bool b_valid_flag;
+    
+    if (!is_a_loader) {
+        const int vec_idx = coop_tid;
+        b_k = vec_idx / (BLOCK_N / 8);
+        b_n = (vec_idx % (BLOCK_N / 8)) * 8;
+        b_valid_flag = (b_k < BLOCK_K) && (block_n + b_n + 7 < N);
+    }
+    
+    // Base pointers
+    const __half* A_base = A + block_m * K;
+    const __half* B_base = B + block_n;
+    
+    // ========================================================================
+    // PROLOGUE: Cooperative load of first tile
+    // ========================================================================
+    if (is_a_loader) {
+        #pragma unroll
+        for (int v = 0; v < A_VECS_PER_THREAD; v++) {
+            if (a_valid[v] && a_col[v] + 8 <= K) {
+                *reinterpret_cast<half8*>(&A_lds[0][a_row[v]][a_col[v]]) = 
+                    *reinterpret_cast<const half8*>(A_base + a_row[v] * K + a_col[v]);
+            }
+        }
+    } else {
+        if (b_valid_flag && b_k < K) {
+            half8 b_vec = *reinterpret_cast<const half8*>(B_base + b_k * N + b_n);
+            #pragma unroll
+            for (int i = 0; i < 8; i++) {
+                B_lds[0][b_n + i][b_k] = reinterpret_cast<__half*>(&b_vec)[i];
+            }
+        }
+    }
+    
+    __syncthreads();
+    
+    int curr_buf = 0;
+    
+    // ========================================================================
+    // MAIN LOOP
+    // ========================================================================
+    for (int k = 0; k < K; k += BLOCK_K) {
+        const int next_buf = 1 - curr_buf;
+        const bool has_next = (k + BLOCK_K < K);
+        
+        // Load fragments and compute
+        fragment<matrix_a, WMMA_M, WMMA_N, WMMA_K, __half, row_major> a_frag[2];
+        fragment<matrix_b, WMMA_M, WMMA_N, WMMA_K, __half, col_major> b_frag[2];
+        
+        if (warp_active) {
+            #pragma unroll
+            for (int ti = 0; ti < 2; ti++)
+                load_matrix_sync_lds(a_frag[ti], &A_lds[curr_buf][warp_m_base + ti * WMMA_M][0], A_STRIDE);
+            #pragma unroll
+            for (int tj = 0; tj < 2; tj++)
+                load_matrix_sync_lds_b_transposed(b_frag[tj], &B_lds[curr_buf][warp_n_base + tj * WMMA_N][0], B_STRIDE);
+        }
+        
+        // Prefetch next tile cooperatively
+        half8 a_prefetch[A_VECS_PER_THREAD] = {};
+        half8 b_prefetch = {};
+        
+        if (has_next) {
+            if (is_a_loader) {
+                #pragma unroll
+                for (int v = 0; v < A_VECS_PER_THREAD; v++) {
+                    if (a_valid[v] && (k + BLOCK_K + a_col[v] + 8 <= K)) {
+                        a_prefetch[v] = *reinterpret_cast<const half8*>(
+                            A_base + a_row[v] * K + (k + BLOCK_K) + a_col[v]);
+                    }
+                }
+            } else {
+                if (b_valid_flag && (k + BLOCK_K + b_k < K)) {
+                    b_prefetch = *reinterpret_cast<const half8*>(
+                        B_base + (k + BLOCK_K + b_k) * N + b_n);
+                }
+            }
+        }
+        
+        // MMA compute
+        if (warp_active) {
+            mma_sync(c_frag[0][0], a_frag[0], b_frag[0], c_frag[0][0]);
+            mma_sync(c_frag[0][1], a_frag[0], b_frag[1], c_frag[0][1]);
+            mma_sync(c_frag[1][0], a_frag[1], b_frag[0], c_frag[1][0]);
+            mma_sync(c_frag[1][1], a_frag[1], b_frag[1], c_frag[1][1]);
+        }
+        
+        // Write prefetch to LDS
+        if (has_next) {
+            if (is_a_loader) {
+                #pragma unroll
+                for (int v = 0; v < A_VECS_PER_THREAD; v++) {
+                    if (a_valid[v]) {
+                        *reinterpret_cast<half8*>(&A_lds[next_buf][a_row[v]][a_col[v]]) = a_prefetch[v];
+                    }
+                }
+            } else {
+                if (b_valid_flag) {
+                    #pragma unroll
+                    for (int i = 0; i < 8; i++) {
+                        B_lds[next_buf][b_n + i][b_k] = reinterpret_cast<__half*>(&b_prefetch)[i];
+                    }
+                }
+            }
+        }
+        
+        __syncthreads();
+        curr_buf = next_buf;
+    }
+    
+    // ========================================================================
+    // EPILOGUE: Store results
+    // ========================================================================
+    if (warp_active) {
+        #pragma unroll
+        for (int ti = 0; ti < 2; ti++) {
+            #pragma unroll
+            for (int tj = 0; tj < 2; tj++) {
+                const int tile_row_base = block_m + warp_m_base + ti * WMMA_M;
+                const int tile_col_base = block_n + warp_n_base + tj * WMMA_N;
+                const int c_col = tile_col_base + (lane_id % 16);
+                
+                if (c_col < N) {
+                    #pragma unroll
+                    for (int i = 0; i < 8; i++) {
+                        const int c_row = tile_row_base + i * 2 + (lane_id / 16);
+                        if (c_row < M) C[c_row * N + c_col] = c_frag[ti][tj].x[i];
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Template instantiation
+template __global__ void wmma_gemm_kernel_coop<8, 4, 2>(
+    const __half*, const __half*, float*, int, int, int);
+
 #endif // WMMA_KERNELS_OPTIMIZED_HPP
 
 

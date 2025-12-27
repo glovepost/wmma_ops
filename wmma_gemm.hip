@@ -2030,6 +2030,45 @@ torch::Tensor wmma_gemm_adaptive(torch::Tensor A, torch::Tensor B,
     return C_out;
 }
 
+// Cooperative loading kernel - half threads load A, half load B simultaneously
+torch::Tensor wmma_matmul_coop(torch::Tensor A, torch::Tensor B) {
+    TORCH_CHECK(A.is_cuda() && B.is_cuda(), "Inputs must be CUDA tensors");
+    TORCH_CHECK(A.device() == B.device(), "Inputs must be on same device");
+    TORCH_CHECK(A.dtype() == torch::kFloat16 && B.dtype() == torch::kFloat16, "Inputs must be float16");
+    TORCH_CHECK(A.dim() == 2 && B.dim() == 2, "Inputs must be 2D");
+    TORCH_CHECK(A.size(1) == B.size(0), "Inner dimensions must match");
+    
+    A = A.contiguous();
+    B = B.contiguous();
+    
+    TORCH_CHECK((reinterpret_cast<uintptr_t>(A.data_ptr()) % 16) == 0, 
+                "A must be 16-byte aligned for vectorized loads");
+    TORCH_CHECK((reinterpret_cast<uintptr_t>(B.data_ptr()) % 16) == 0, 
+                "B must be 16-byte aligned for vectorized loads");
+    
+    const int M = A.size(0);
+    const int K = A.size(1);
+    const int N = B.size(1);
+    
+    auto C = torch::empty({M, N}, torch::dtype(torch::kFloat32).device(A.device()));
+    
+    const __half* A_ptr = reinterpret_cast<const __half*>(A.data_ptr<at::Half>());
+    const __half* B_ptr = reinterpret_cast<const __half*>(B.data_ptr<at::Half>());
+    float* C_ptr = C.data_ptr<float>();
+    
+    hipStream_t stream = c10::hip::getCurrentHIPStream(A.device().index()).stream();
+    
+    constexpr int block_m = 128;
+    constexpr int block_n = 64;
+    dim3 grid((N + block_n - 1) / block_n, (M + block_m - 1) / block_m);
+    dim3 block(256);
+    
+    wmma_gemm_kernel_coop<8, 4, 2><<<grid, block, 0, stream>>>(A_ptr, B_ptr, C_ptr, M, N, K);
+    
+    C10_HIP_KERNEL_LAUNCH_CHECK();
+    return C;
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // Original matmul functions (C = A × B)
     m.def("matmul", &wmma_matmul, "WMMA GEMM (FP16→FP32) - 21 TFLOPS on gfx1151");
@@ -2045,6 +2084,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("matmul_asmOpt", &wmma_matmul_asmOpt, "WMMA GEMM with asm scheduling hints");
     m.def("matmul_swizzled", &wmma_matmul_swizzled, "WMMA GEMM with XOR-swizzled LDS (bank conflict-free, 33% less LDS)");
     m.def("matmul_xor_optimized", &wmma_matmul_xor_optimized, "WMMA GEMM with corrected XOR swizzle and fragment layout (from wmma_optimizations.hpp)");
+    m.def("matmul_coop", &wmma_matmul_coop, "WMMA GEMM with cooperative loading (half threads load A, half load B)");
     
     // New BLAS-style GEMM functions (C = alpha * A × B + beta * C)
     m.def("gemm", &wmma_gemm, 
