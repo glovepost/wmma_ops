@@ -1,0 +1,9 @@
+.vs
+.vscode
+[Dd]ebug
+[Rr]elease
+*.vcxproj.user
+[Bb]uild
+*.pdb
+CMakeUserPresets.json
+.cline_storage
