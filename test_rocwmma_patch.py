@@ -227,6 +227,112 @@ def benchmark_performance():
         traceback.print_exc()
         return False
 
+def benchmark_all_kernels():
+    """Benchmark all kernel variants on a standard matrix size"""
+    try:
+        import torch
+        import wmma_ops
+        
+        print("\n🔬 Benchmarking all kernel variants...")
+        print("   Matrix size: 4096×4096×2048")
+        print("   " + "-" * 60)
+        
+        # Standard test matrix
+        M, N, K = 4096, 4096, 2048
+        A = torch.randn(M, K, device='cuda', dtype=torch.float16)
+        B = torch.randn(K, N, device='cuda', dtype=torch.float16)
+        C_ref = torch.matmul(A, B)
+        
+        flops = 2 * M * K * N
+        iterations = 20
+        warmup = 5
+        
+        def benchmark_kernel(name, func, *args):
+            """Benchmark a single kernel and check correctness"""
+            try:
+                # Warmup
+                for _ in range(warmup):
+                    result = func(*args)
+                torch.cuda.synchronize()
+                
+                # Time
+                start = time.perf_counter()
+                for _ in range(iterations):
+                    result = func(*args)
+                torch.cuda.synchronize()
+                elapsed = time.perf_counter() - start
+                
+                avg_time = elapsed / iterations
+                tflops = flops / avg_time / 1e12
+                
+                # Check correctness
+                max_err = (result - C_ref).abs().max().item()
+                rel_err = max_err / C_ref.abs().max().item()
+                correct = rel_err < 0.01  # 1% tolerance
+                
+                return avg_time, tflops, rel_err, correct
+            except Exception as e:
+                return None, None, None, str(e)
+        
+        # All kernel variants to test
+        kernels = [
+            ("matmul", wmma_ops.matmul),
+            ("matmul_adaptive", wmma_ops.matmul_adaptive),
+            ("matmul_kunroll", wmma_ops.matmul_kunroll),
+            ("matmul_noPrefetch", wmma_ops.matmul_noPrefetch),
+            ("matmul_highOcc", wmma_ops.matmul_highOcc),
+            ("matmul_quad", wmma_ops.matmul_quad),
+            ("matmul_native", wmma_ops.matmul_native),
+            ("matmul_hilbert", wmma_ops.matmul_hilbert),
+            ("matmul_zerocopy", wmma_ops.matmul_zerocopy),
+            ("matmul_asmOpt", wmma_ops.matmul_asmOpt),
+            ("matmul_swizzled", wmma_ops.matmul_swizzled),
+            ("matmul_xor_optimized", wmma_ops.matmul_xor_optimized),
+        ]
+        
+        # PyTorch reference
+        t_ref, _, _, _ = benchmark_kernel("PyTorch", torch.matmul, A, B)
+        tflops_ref = flops / t_ref / 1e12 if t_ref else 0
+        print(f"   {'PyTorch (reference)':<25} {t_ref*1000:>8.3f} ms  {tflops_ref:>6.2f} TFLOPS  ✅")
+        print("   " + "-" * 60)
+        
+        results = []
+        for name, func in kernels:
+            t, tflops, rel_err, correct = benchmark_kernel(name, func, A, B)
+            
+            if t is None:
+                print(f"   {name:<25} {'ERROR':<8}       {correct}")
+                results.append((name, 0, 0, False))
+            elif correct is True:
+                speedup = t_ref / t if t else 0
+                status = "✅" if correct else "❌"
+                print(f"   {name:<25} {t*1000:>8.3f} ms  {tflops:>6.2f} TFLOPS  {status} (err: {rel_err:.4%})")
+                results.append((name, tflops, rel_err, True))
+            else:
+                print(f"   {name:<25} {t*1000:>8.3f} ms  {tflops:>6.2f} TFLOPS  ❌ (err: {rel_err:.4%})")
+                results.append((name, tflops, rel_err, False))
+        
+        # Summary
+        print("   " + "-" * 60)
+        correct_kernels = [(n, t) for n, t, _, c in results if c]
+        if correct_kernels:
+            best = max(correct_kernels, key=lambda x: x[1])
+            print(f"\n   🏆 Best performing correct kernel: {best[0]} ({best[1]:.2f} TFLOPS)")
+            print(f"   📊 PyTorch reference: {tflops_ref:.2f} TFLOPS")
+            print(f"   📈 Best vs PyTorch: {best[1]/tflops_ref*100:.1f}%")
+        
+        failed = [n for n, _, _, c in results if not c]
+        if failed:
+            print(f"\n   ⚠️  Failed kernels: {', '.join(failed)}")
+        
+        print("\n✅ All kernel benchmarks completed!")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Kernel benchmark failed: {e}")
+        traceback.print_exc()
+        return False
+
 def main():
     """Run all tests"""
     print("=" * 60)
@@ -243,9 +349,13 @@ def main():
         print("\n❌ Correctness tests failed")
         return 1
     
-    # Benchmark performance
+    # Benchmark performance (basic)
     if not benchmark_performance():
         print("\n⚠️  Performance benchmarks failed (non-fatal)")
+    
+    # Benchmark all kernel variants
+    if not benchmark_all_kernels():
+        print("\n⚠️  Kernel benchmarks failed (non-fatal)")
     
     print("\n" + "=" * 60)
     print("✅ All tests completed successfully!")

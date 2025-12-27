@@ -1,0 +1,80 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+.eggs/
+*.manifest
+*.spec
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter
+.ipynb_checkpoints/
+
+# PyTorch/HIP build artifacts
+*.o
+*.a
+*.hsaco
+*.ii
+*.bc
+*.s
+*.hip.cpp
+*.cui
+
+# Compiled extensions
+*.cpython-*.so
+wmma_ops*.so
+
+# Build directories
+build/
+_skbuild/
+
+# Tuning artifacts
+tunableop_results*.csv
+*.tunableop
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# Profiling
+*.csv
+*.json
+!docker-compose*.yml
+*.prof
+*.nsys-rep
+*.ncu-rep
+
+# Environment files (may contain secrets)
+.env
+
+# Benchmark results (optional - uncomment to track)
+# benchmark_results/
+# runs/
+
+# macOS
+.DS_Store
+
+# Linux
+*.swp
+
+# Editor backups
+*~
+\#*\#
