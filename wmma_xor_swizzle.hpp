@@ -935,7 +935,10 @@ __global__ void wmma_gemm_kernel_xor_swizzle_v2(
     int curr_buf = 0;
     
     // Fragment index: for RDNA3 WMMA, lanes 0-15 and 16-31 need same data
-    const int frag_col = lane_id % 16;
+    // AMD GPUOpen pattern:
+    //   A fragment: each lane loads its own ROW of A (all 16 K values)
+    //   B fragment: each lane loads its own COLUMN of B (all 16 K values)
+    const int frag_idx = lane_id % 16;
     
     // ========================================================================
     // MAIN LOOP
@@ -948,43 +951,43 @@ __global__ void wmma_gemm_kernel_xor_swizzle_v2(
         // ====================================================================
         // LOAD FRAGMENTS FROM SWIZZLED LDS
         // 
-        // For A (row-major): fragment needs column frag_col, rows 0..15
-        // Each row may have its K-groups swizzled differently
-        // We must un-swizzle each row independently
-        //
-        // For B (transposed to col-major): fragment needs row frag_col, 
-        // all K values 0..15
+        // FIXED: AMD GPUOpen pattern requires:
+        // For A (row-major): each lane loads ROW frag_idx, all K values 0..15
+        // For B (transposed): each lane loads ROW frag_idx from B_lds[N][K]
+        //                     (which is COLUMN frag_idx of original B)
         // ====================================================================
         
         half16 a0, a1, b0, b1;
         
         // Load A fragments: 2 tiles of 16x16 each
-        // Tile 0: rows [warp_m_base .. warp_m_base+15], column frag_col
-        // Tile 1: rows [warp_m_base+16 .. warp_m_base+31], column frag_col
+        // Each lane loads its own row (frag_idx), all 16 K values
+        // Tile 0: row (warp_m_base + frag_idx)
+        // Tile 1: row (warp_m_base + 16 + frag_idx)
+        const int a_row0 = warp_m_base + frag_idx;
+        const int a_row1 = warp_m_base + 16 + frag_idx;
+        
         #pragma unroll
-        for (int r = 0; r < 16; r++) {
-            int row0 = warp_m_base + r;
-            int row1 = warp_m_base + 16 + r;
+        for (int kk = 0; kk < 16; kk++) {
+            // Un-swizzle: get physical location of logical (row, kk)
+            int phys0 = Swizzle::to_physical(a_row0, kk, A_STRIDE);
+            int phys1 = Swizzle::to_physical(a_row1, kk, A_STRIDE);
             
-            // Un-swizzle: get physical location of logical (row, frag_col)
-            int phys0 = Swizzle::to_physical(row0, frag_col, A_STRIDE);
-            int phys1 = Swizzle::to_physical(row1, frag_col, A_STRIDE);
-            
-            a0[r] = *reinterpret_cast<const _Float16*>(&A_lds[curr_buf][phys0]);
-            a1[r] = *reinterpret_cast<const _Float16*>(&A_lds[curr_buf][phys1]);
+            a0[kk] = *reinterpret_cast<const _Float16*>(&A_lds[curr_buf][phys0]);
+            a1[kk] = *reinterpret_cast<const _Float16*>(&A_lds[curr_buf][phys1]);
         }
         
         // Load B fragments: 2 tiles of 16x16 each
-        // Tile 0: row (warp_n_base + frag_col), columns 0..15
-        // Tile 1: row (warp_n_base + 16 + frag_col), columns 0..15
+        // Each lane loads row frag_idx from transposed B_lds (= column frag_idx of original B)
+        // Tile 0: row (warp_n_base + frag_idx), all K values
+        // Tile 1: row (warp_n_base + 16 + frag_idx), all K values
+        const int b_row0 = warp_n_base + frag_idx;
+        const int b_row1 = warp_n_base + 16 + frag_idx;
+        
         #pragma unroll
         for (int kk = 0; kk < 16; kk++) {
-            int n0 = warp_n_base + frag_col;
-            int n1 = warp_n_base + 16 + frag_col;
-            
             // Un-swizzle
-            int phys0 = Swizzle::to_physical(n0, kk, B_STRIDE);
-            int phys1 = Swizzle::to_physical(n1, kk, B_STRIDE);
+            int phys0 = Swizzle::to_physical(b_row0, kk, B_STRIDE);
+            int phys1 = Swizzle::to_physical(b_row1, kk, B_STRIDE);
             
             b0[kk] = *reinterpret_cast<const _Float16*>(&B_lds[curr_buf][phys0]);
             b1[kk] = *reinterpret_cast<const _Float16*>(&B_lds[curr_buf][phys1]);
