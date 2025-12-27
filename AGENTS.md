@@ -4,9 +4,32 @@
 Core HIP/C++ kernels live in `wmma_gemm.hip` and the supporting headers `wmma_kernels_optimized.hpp`, `wmma_tile_selection.hpp`, and `wmma_device_helpers.hpp`. The custom rocWMMA header patch is in `rocwmma_patch/rocwmma_gfx1151.hpp`. Python entry points and benchmarking utilities are top-level scripts (for example, `autotune.py`, `benchmark_summary.py`, `rocprof_wmma.py`). Long-form notes live in `docs/WMMA_DEVELOPMENT_NOTES.md`, while external reference projects are under `examples/`.
 
 ## Build, Test, and Development Commands
+
+### Using Docker (Recommended)
+The project includes a Docker environment with ROCm, PyTorch, and all dependencies pre-configured for gfx1151.
+
+```bash
+# Build the Docker image (first time only)
+docker compose -f docker/docker-compose.benchmark.yml build
+
+# Run the full test suite
+docker compose -f docker/docker-compose.benchmark.yml run --rm benchmark \
+  bash -c "export LD_LIBRARY_PATH=/opt/venv/lib/python3.12/site-packages/torch/lib:\$LD_LIBRARY_PATH && \
+           cd /workspace/wmma_ops && python test_rocwmma_patch.py"
+
+# Interactive development shell
+docker compose -f docker/docker-compose.benchmark.yml run --rm benchmark bash
+# Then inside the container:
+export LD_LIBRARY_PATH=/opt/venv/lib/python3.12/site-packages/torch/lib:$LD_LIBRARY_PATH
+cd /workspace/wmma_ops
+pip install -e . --no-build-isolation
+python test_rocwmma_patch.py
+```
+
+### Host Installation (requires ROCm + hipcc on PATH)
 - `python3 -m pip install -e . --no-build-isolation` — build and install the extension in editable mode.
-- `./build_and_test.sh` — end-to-end build + import check + test run (expects ROCm + hipcc).
-- `python3 test_rocwmma_patch.py` — main correctness/performance test suite.
+- `./build_and_test.sh` — end-to-end build + import check + test run.
+- `python3 test_rocwmma_patch.py` — main correctness/performance test suite (tests all 12 kernel variants).
 - `python3 test_fragment_loading.py` — focused fragment-loading correctness checks.
 - `python3 autotune.py --quick` — quick tuning run without Optuna.
 - `python3 rocprof_wmma.py` — profiling run with rocprof helpers.
