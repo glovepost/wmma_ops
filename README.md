@@ -148,16 +148,15 @@ To institutionalize correctness, use a **Deterministic Layout Probe**:
 ### Using pip
 
 ```bash
-cd extensions/wmma_ops
-pip install -e .
+cd /path/to/wmma_ops
+pip install -e . --no-build-isolation
 ```
 
-### Using Docker (Recommended)
+### Using Docker (Optional)
 
 ```bash
-docker compose -f docker/docker-compose.benchmark.yml run --rm benchmark bash -c \
-  "cd /tmp && cp -r /workspace/latentmas/extensions/wmma_ops . && \
-   cd wmma_ops && pip install -e . --no-build-isolation"
+docker run --rm -v "$(pwd)":/workspace/wmma_ops -w /workspace/wmma_ops <rocm-container> \
+  bash -lc "pip install -e . --no-build-isolation"
 ```
 
 ### Build Requirements
@@ -185,7 +184,7 @@ B = torch.randn(2048, 4096, device='cuda', dtype=torch.float16)
 C = wmma_ops.matmul(A, B)
 
 # Alternative: specify tile configuration
-C = wmma_ops.matmul_tiled(A, B, warps_m=4, warps_n=2)  # 128×64 tile
+C = wmma_ops.matmul_tiled(A, B, 1)  # 1 = 128×64 tile
 
 # Verify correctness
 C_ref = torch.matmul(A, B)
@@ -814,24 +813,29 @@ wmma_ops/
 
 ### Primary Resources
 
-1. **Deep Dive into Matrix Optimization on AMD GPUs** (Sébastien Vince)
+1. **rocWMMA Documentation (ROCm)**
+   - [rocWMMA Docs](https://rocm.docs.amd.com/projects/rocWMMA/en/latest/index.html)
+   - [API Reference](https://rocm.docs.amd.com/projects/rocWMMA/en/latest/api-reference/api-reference-guide.html)
+
+2. **Deep Dive into Matrix Optimization on AMD GPUs** (Sébastien Vince)
    - [Blog Post](https://seb-v.github.io/optimization/update/2025/01/20/Fast-GPU-Matrix-multiplication.html)
    - Achievement: 49 TFLOPS on FP32 GEMM (60% faster than rocBLAS)
 
-2. **AMD RDNA™ 3.5 ISA Reference Guide**
+3. **AMD RDNA™ 3.5 ISA Reference Guide**
    - [AMD Documentation](https://docs.amd.com/v/u/en-US/rdna35_instruction_set_architecture)
 
-3. **LLVM AMDGPU Usage**
+4. **LLVM AMDGPU Usage**
    - [LLVM Documentation](https://llvm.org/docs/AMDGPUUsage.html)
    - Code object metadata, register usage, ISA details
 
-4. **How to Accelerate AI Applications on RDNA 3 Using WMMA**
-   - [AMD GPUOpen](https://gpuopen.com/accelerating-ai-rdna3-wmma/)
+5. **rocBLAS Documentation (ROCm)**
+   - [rocBLAS Docs](https://rocm.docs.amd.com/projects/rocBLAS/en/latest/index.html)
 
 ### Implementation References
 
 - [llama.cpp PR #16827](https://github.com/ggml-org/llama.cpp/pull/16827) - Original optimizations
 - [rocWMMA Library](https://github.com/ROCm/rocWMMA) - AMD's rocWMMA library
+- [rocWMMA Samples](https://github.com/ROCm/rocWMMA/tree/develop/samples) - Reference kernels and usage patterns
 - [AMD Matrix Instruction Calculator](https://github.com/ROCm/amd_matrix_instruction_calculator) - WMMA layout verification
 
 ---

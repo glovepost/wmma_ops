@@ -1232,7 +1232,7 @@ for (int kk = 0; kk < 16; kk++) {
 ## Running the Test
 
 ```bash
-cd extensions/wmma_ops
+cd /path/to/wmma_ops
 
 # Ensure extension is built
 pip install -e . --no-build-isolation
@@ -1804,7 +1804,7 @@ Based on our fragment layout research, we want to confirm:
 ## Running the Test
 
 ```bash
-cd extensions/wmma_ops
+cd /path/to/wmma_ops
 
 # Build the extension (if not already built)
 pip install -e . --no-build-isolation
@@ -2029,11 +2029,10 @@ From `FRAGMENT_LAYOUT_RESEARCH_SUMMARY.md`:
 ## Test Command
 
 ```bash
-cd extensions/wmma_ops
-docker compose -f ../../docker/docker-compose.benchmark.yml run --rm benchmark bash -c \
-  "cd /tmp && cp -r /workspace/latentmas/extensions/wmma_ops . && \
-   cd wmma_ops && pip install -e . --no-build-isolation >/dev/null 2>&1 && \
-   python3 test_fragment_loading.py"
+cd /path/to/wmma_ops
+docker run --rm -v "$(pwd)":/workspace/wmma_ops -w /workspace/wmma_ops <rocm-container> \
+  bash -lc "pip install -e . --no-build-isolation >/dev/null 2>&1 && \
+  python3 test_fragment_loading.py"
 ```
 
 # AMD RDNA3/gfx1151 WMMA Fragment Layout Reference
@@ -2344,4 +2343,3 @@ When debugging XOR swizzles or fragment mapping, isolate the following primitive
 - **Epilogue Dump**: WMMA Accumulator → Global memory using a known test pattern.
 
 Using deterministic patterns (`A[row,col] = row*256 + col`) during these tests ensures that bugs in swizzle math, lane replication, or epilogue mapping are identified in minutes rather than hours.
-

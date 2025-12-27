@@ -1,0 +1,125 @@
+# ROCm 7.9 Preview Benchmarking Environment
+# Purpose: Dedicated container for testing PyTorch/HuggingFace models
+#
+# Usage:
+#   docker compose -f docker/docker-compose.benchmark.yml build
+#   docker compose -f docker/docker-compose.benchmark.yml run benchmark
+#   docker compose -f docker/docker-compose.benchmark.yml run benchmark \
+#     python /workspace/benchmarks/bench_model.py --model Qwen/Qwen2.5-7B-Instruct
+
+services:
+  benchmark:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.benchmark
+    image: rocm79-benchmark:gfx1151
+    container_name: rocm-benchmark
+    network_mode: "host"
+
+    # Load HF_TOKEN from .env
+    env_file:
+      - ../.env
+
+    # ROCm GPU access
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - video
+
+    # Security for ROCm
+    security_opt:
+      - seccomp:unconfined
+
+    # Environment
+    environment:
+      # ROCm settings
+      - PYTORCH_ROCM_ARCH=gfx1151
+      - HIP_VISIBLE_DEVICES=0
+
+      # HuggingFace cache
+      - HF_HOME=/workspace/huggingface
+      - TRANSFORMERS_OFFLINE=0
+
+      # ============================================
+      # PERFORMANCE OPTIMIZATIONS (from benchmarking)
+      # ============================================
+
+      # TunableOp - CRITICAL: +57% GEMM improvement
+      - PYTORCH_TUNABLEOP_ENABLED=1
+      - PYTORCH_TUNABLEOP_TUNING=1
+      - PYTORCH_TUNABLEOP_VERBOSE=0
+
+      # hipBLASLt - Prefer optimized BLAS library
+      - TORCH_BLAS_PREFER_HIPBLASLT=1
+
+      # SDPA/Flash Attention via AOTriton
+      - TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1
+
+      # Memory allocation optimization (APU specific)
+      - PYTORCH_ALLOC_CONF=garbage_collection_threshold:0.9,max_split_size_mb:512
+
+      # AMD RDNA stability
+      - HIP_FORCE_DEV_KERNARG=1
+
+      # Triton cache and autotuning
+      - TRITON_CACHE_DIR=/root/.cache/triton
+      - TRITON_PERSISTENT_CACHE=1
+      - TRITON_AUTOTUNE_PARALLEL=1
+      - TRITON_PRINT_AUTOTUNING=0
+
+      # Parallel compilation
+      - OMP_NUM_THREADS=16
+      - MKL_NUM_THREADS=16
+      - TRITON_PARALLEL_COMPILE_THREADS=16
+
+      # TunableOp results file (PyTorch appends GPU index as suffix)
+      - PYTORCH_TUNABLEOP_RESULTS_DIR=/root/.cache/tunableop
+
+      # Enable Flash Attention 2 (Triton Backend for ROCm)
+      - FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE
+
+    # Mount volumes
+    volumes:
+      # Project source code
+      - ..:/workspace/wmma_ops
+
+      # Models directory
+      - /opt/models:/opt/models
+
+      # HuggingFace cache (host mounted for persistence)
+      - ~/.cache/huggingface:/workspace/huggingface
+
+      # Triton cache for kernel persistence
+      - benchmark_triton_cache:/root/.cache/triton
+
+      # TunableOp cache for GEMM kernel persistence
+      - benchmark_tunableop_cache:/root/.cache/tunableop
+
+      # Results output
+      - ../benchmark_results:/workspace/results
+
+      # Runs output (for ablations)
+      - ../runs:/workspace/runs
+
+    # Shared memory for PyTorch DataLoader
+    shm_size: '16gb'
+
+    # Keep container resources manageable
+    deploy:
+      resources:
+        limits:
+          memory: 120g
+
+    # Interactive by default
+    stdin_open: true
+    tty: true
+
+    # Default command
+    command: [ "python", "/workspace/benchmarks/check_env.py" ]
+
+volumes:
+  benchmark_triton_cache:
+    name: benchmark_triton_cache
+  benchmark_tunableop_cache:
+    name: benchmark_tunableop_cache
