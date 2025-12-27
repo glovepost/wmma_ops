@@ -717,10 +717,12 @@ __global__ void wmma_gemm_kernel_asmOpt(
     
     int curr_buf = 0;
     
-    // CORRECTED: Fragment column index
-    // Each lane loads one COLUMN of A and one ROW of transposed B
+    // Fragment row/col index for this lane
     // For RDNA3 WMMA, lanes 0-15 and 16-31 must have replicated data
-    const int frag_col = lane_id % 16;
+    // AMD GPUOpen pattern:
+    //   A fragment: each lane loads its own ROW of A (all 16 K values)
+    //   B fragment: each lane loads its own COLUMN of B (all 16 K values)
+    const int frag_idx = lane_id % 16;
     
     // MAIN LOOP
     #pragma unroll 1  // Prevent over-unrolling which increases register pressure
@@ -732,21 +734,32 @@ __global__ void wmma_gemm_kernel_asmOpt(
         half8 a_prefetch = {};
         half8 b_prefetch = {};
         
-        // CORRECTED: Load fragments from LDS
-        // A fragment: load COLUMN frag_col (rows 0..15 of that column)
-        // B fragment: load ROW frag_col from B_lds[N][K] (all K values)
-        // Note: __half and _Float16 have same bit representation, use reinterpret_cast
+        // FIXED: Load fragments from LDS using correct AMD GPUOpen pattern
+        // A fragment: each lane loads ROW frag_idx (all 16 K values)
+        // B fragment: each lane loads ROW frag_idx from transposed B_lds[N][K] 
+        //             (which is COLUMN frag_idx of original B)
         half16_t a0, a1, b0, b1;
         
+        // A: Load row frag_idx, all K values (vectorized as 2x half8)
+        const __half* a0_row = &A_lds[curr_buf][warp_m_base + frag_idx][0];
+        const __half* a1_row = &A_lds[curr_buf][warp_m_base + 16 + frag_idx][0];
         #pragma unroll
-        for (int row = 0; row < 16; row++) {
-            a0[row] = *reinterpret_cast<const _Float16*>(&A_lds[curr_buf][warp_m_base + row][frag_col]);
-            a1[row] = *reinterpret_cast<const _Float16*>(&A_lds[curr_buf][warp_m_base + 16 + row][frag_col]);
+        for (int kk = 0; kk < 8; kk++) {
+            a0[kk] = *reinterpret_cast<const _Float16*>(&a0_row[kk]);
+            a0[kk + 8] = *reinterpret_cast<const _Float16*>(&a0_row[kk + 8]);
+            a1[kk] = *reinterpret_cast<const _Float16*>(&a1_row[kk]);
+            a1[kk + 8] = *reinterpret_cast<const _Float16*>(&a1_row[kk + 8]);
         }
+        
+        // B: Load row frag_idx from transposed B_lds (= column frag_idx of original B)
+        const __half* b0_row = &B_lds[curr_buf][warp_n_base + frag_idx][0];
+        const __half* b1_row = &B_lds[curr_buf][warp_n_base + 16 + frag_idx][0];
         #pragma unroll
-        for (int kk = 0; kk < 16; kk++) {
-            b0[kk] = *reinterpret_cast<const _Float16*>(&B_lds[curr_buf][warp_n_base + frag_col][kk]);
-            b1[kk] = *reinterpret_cast<const _Float16*>(&B_lds[curr_buf][warp_n_base + 16 + frag_col][kk]);
+        for (int kk = 0; kk < 8; kk++) {
+            b0[kk] = *reinterpret_cast<const _Float16*>(&b0_row[kk]);
+            b0[kk + 8] = *reinterpret_cast<const _Float16*>(&b0_row[kk + 8]);
+            b1[kk] = *reinterpret_cast<const _Float16*>(&b1_row[kk]);
+            b1[kk + 8] = *reinterpret_cast<const _Float16*>(&b1_row[kk + 8]);
         }
         
         // ============ COMPUTE + PREFETCH ============
