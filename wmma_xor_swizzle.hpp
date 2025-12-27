@@ -966,14 +966,29 @@ __global__ void wmma_gemm_kernel_xor_swizzle_v2(
         const int a_row0 = warp_m_base + frag_idx;
         const int a_row1 = warp_m_base + 16 + frag_idx;
         
-        #pragma unroll
-        for (int kk = 0; kk < 16; kk++) {
-            // Un-swizzle: get physical location of logical (row, kk)
-            int phys0 = Swizzle::to_physical(a_row0, kk, A_STRIDE);
-            int phys1 = Swizzle::to_physical(a_row1, kk, A_STRIDE);
-            
-            a0[kk] = *reinterpret_cast<const _Float16*>(&A_lds[curr_buf][phys0]);
-            a1[kk] = *reinterpret_cast<const _Float16*>(&A_lds[curr_buf][phys1]);
+        // OPTIMIZED: Use vectorized loads (2x half8) instead of 16 scalar loads
+        // XOR swizzle swaps k_group 0 and 1 based on row parity
+        // For even rows: group 0 at offset 0, group 1 at offset 8
+        // For odd rows:  group 0 at offset 8, group 1 at offset 0
+        {
+            // A tile 0
+            const int base0 = a_row0 * A_STRIDE;
+            const int grp0_off = (a_row0 & 1) ? 8 : 0;  // Swizzled position of k_group 0
+            const int grp1_off = (a_row0 & 1) ? 0 : 8;  // Swizzled position of k_group 1
+            half8 v0 = *reinterpret_cast<const half8*>(&A_lds[curr_buf][base0 + grp0_off]);
+            half8 v1 = *reinterpret_cast<const half8*>(&A_lds[curr_buf][base0 + grp1_off]);
+            #pragma unroll
+            for (int i = 0; i < 8; i++) { a0[i] = v0[i]; a0[i+8] = v1[i]; }
+        }
+        {
+            // A tile 1
+            const int base1 = a_row1 * A_STRIDE;
+            const int grp0_off = (a_row1 & 1) ? 8 : 0;
+            const int grp1_off = (a_row1 & 1) ? 0 : 8;
+            half8 v0 = *reinterpret_cast<const half8*>(&A_lds[curr_buf][base1 + grp0_off]);
+            half8 v1 = *reinterpret_cast<const half8*>(&A_lds[curr_buf][base1 + grp1_off]);
+            #pragma unroll
+            for (int i = 0; i < 8; i++) { a1[i] = v0[i]; a1[i+8] = v1[i]; }
         }
         
         // Load B fragments: 2 tiles of 16x16 each
@@ -983,14 +998,26 @@ __global__ void wmma_gemm_kernel_xor_swizzle_v2(
         const int b_row0 = warp_n_base + frag_idx;
         const int b_row1 = warp_n_base + 16 + frag_idx;
         
-        #pragma unroll
-        for (int kk = 0; kk < 16; kk++) {
-            // Un-swizzle
-            int phys0 = Swizzle::to_physical(b_row0, kk, B_STRIDE);
-            int phys1 = Swizzle::to_physical(b_row1, kk, B_STRIDE);
-            
-            b0[kk] = *reinterpret_cast<const _Float16*>(&B_lds[curr_buf][phys0]);
-            b1[kk] = *reinterpret_cast<const _Float16*>(&B_lds[curr_buf][phys1]);
+        // OPTIMIZED: Use vectorized loads for B as well
+        {
+            // B tile 0
+            const int base0 = b_row0 * B_STRIDE;
+            const int grp0_off = (b_row0 & 1) ? 8 : 0;
+            const int grp1_off = (b_row0 & 1) ? 0 : 8;
+            half8 v0 = *reinterpret_cast<const half8*>(&B_lds[curr_buf][base0 + grp0_off]);
+            half8 v1 = *reinterpret_cast<const half8*>(&B_lds[curr_buf][base0 + grp1_off]);
+            #pragma unroll
+            for (int i = 0; i < 8; i++) { b0[i] = v0[i]; b0[i+8] = v1[i]; }
+        }
+        {
+            // B tile 1
+            const int base1 = b_row1 * B_STRIDE;
+            const int grp0_off = (b_row1 & 1) ? 8 : 0;
+            const int grp1_off = (b_row1 & 1) ? 0 : 8;
+            half8 v0 = *reinterpret_cast<const half8*>(&B_lds[curr_buf][base1 + grp0_off]);
+            half8 v1 = *reinterpret_cast<const half8*>(&B_lds[curr_buf][base1 + grp1_off]);
+            #pragma unroll
+            for (int i = 0; i < 8; i++) { b1[i] = v0[i]; b1[i+8] = v1[i]; }
         }
         
         // ====================================================================
