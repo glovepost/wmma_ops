@@ -2,16 +2,23 @@
 
 Technical reference for Wave Matrix Multiply-Accumulate (WMMA) fragment layouts on AMD RDNA3.5 architecture.
 
+**Sources**: 
+- [AMD GPUOpen: How to accelerate AI applications on RDNA 3 using WMMA](https://gpuopen.com/learn/wmma_on_rdna3/)
+- [AMD Matrix Instruction Calculator](https://github.com/ROCm/amd_matrix_instruction_calculator)
+- [rocWMMA Documentation](https://rocm.docs.amd.com/projects/rocWMMA/en/latest/)
+
 ---
 
 ## Overview
 
 The `v_wmma_f32_16x16x16_f16` instruction performs a 16×16×16 matrix multiply-accumulate:
-- **A Matrix**: 16×16 (M×K), FP16 input
-- **B Matrix**: 16×16 (K×N), FP16 input  
-- **C/D Matrix**: 16×16 (M×N), FP32 accumulator
+- **A Matrix**: 16×16 (M×K), FP16 input, stored in **column-major** order in registers
+- **B Matrix**: 16×16 (K×N), FP16 input, stored in **row-major** order in registers
+- **C/D Matrix**: 16×16 (M×N), FP32 accumulator, stored in **row-major** order
 
 Each wave (32 threads) cooperatively loads and processes one 16×16 tile.
+
+**Critical**: RDNA3 WMMA requires that A_frag and B_frag contents are **replicated** between lanes 0-15 and lanes 16-31.
 
 ---
 
@@ -19,31 +26,35 @@ Each wave (32 threads) cooperatively loads and processes one 16×16 tile.
 
 ### A Matrix Fragment (16×16, FP16)
 
-**Hardware expects**: `a_frag[i] = A[i][lane % 16]`
+**Storage**: Column-major in registers. Each lane holds one **row** of matrix A.
+
+**Hardware expects**: `a_frag[k] = A[lane % 16][k]` (lane's row, all K columns)
 
 | Fragment Index | Matrix Element | Description |
 |----------------|----------------|-------------|
-| `a_frag[0]` | `A[0][lane % 16]` | Row 0, column = lane |
-| `a_frag[1]` | `A[1][lane % 16]` | Row 1, column = lane |
+| `a_frag[0]` | `A[lane % 16][0]` | Lane's row, K=0 |
+| `a_frag[1]` | `A[lane % 16][1]` | Lane's row, K=1 |
 | ... | ... | ... |
-| `a_frag[15]` | `A[15][lane % 16]` | Row 15, column = lane |
+| `a_frag[15]` | `A[lane % 16][15]` | Lane's row, K=15 |
 
-**Key insight**: Each lane loads one **column** of the A matrix (all 16 rows of that column).
+**Key insight**: Each lane loads one **row** of the A matrix (all 16 K values of that row).
 
 **Lane replication**: Lanes 0-15 and lanes 16-31 must contain identical data.
 
 ### B Matrix Fragment (16×16, FP16)
 
-**Hardware expects**: `b_frag[k] = B[k][lane % 16]`
+**Storage**: Row-major in registers. Each lane holds one **column** of matrix B.
+
+**Hardware expects**: `b_frag[k] = B[k][lane % 16]` (all K rows, lane's column)
 
 | Fragment Index | Matrix Element | Description |
 |----------------|----------------|-------------|
-| `b_frag[0]` | `B[0][lane % 16]` | Row 0, column = lane |
-| `b_frag[1]` | `B[1][lane % 16]` | Row 1, column = lane |
+| `b_frag[0]` | `B[0][lane % 16]` | K=0, lane's column |
+| `b_frag[1]` | `B[1][lane % 16]` | K=1, lane's column |
 | ... | ... | ... |
-| `b_frag[15]` | `B[15][lane % 16]` | Row 15, column = lane |
+| `b_frag[15]` | `B[15][lane % 16]` | K=15, lane's column |
 
-**Key insight**: Each lane loads one **column** of the B matrix.
+**Key insight**: Each lane loads one **column** of the B matrix (all 16 K values of that column).
 
 **Lane replication**: Lanes 0-15 and lanes 16-31 must contain identical data.
 
@@ -69,32 +80,63 @@ Each wave (32 threads) cooperatively loads and processes one 16×16 tile.
 
 ---
 
-## Loading Fragments from LDS
+## Loading Fragments from Global/LDS Memory
 
-### A Fragment from Row-Major LDS
+### A Fragment from Row-Major Memory
 
-When A is stored in LDS as `A_lds[row][col]` (row-major):
+When A is stored in row-major format `A[row][col]` (standard C layout):
 
 ```cpp
 const int lane = threadIdx.x % 16;
 
-// Load column 'lane' from all 16 rows
+// Each lane loads its own ROW of A (all 16 K values)
 #pragma unroll
-for (int i = 0; i < 16; i++) {
-    a_frag[i] = A_lds[row_offset + i][lane];
+for (int k = 0; k < 16; k++) {
+    a_frag[k] = A[16 * lane + k];  // A[lane][k] in row-major
 }
 ```
 
-**Pattern**: Iterate over rows, take column `lane` from each row.
+**Pattern**: Each lane loads row `lane`, iterating over all K columns.
 
-### B Fragment from Transposed LDS
+**From AMD GPUOpen example**:
+```cpp
+for (int ele = 0; ele < 16; ++ele) {
+    a_frag[ele] = a[16 * lane + ele];  // Load row 'lane'
+}
+```
 
-When B is transposed in LDS as `B_lds[N][K]` (each row contains one column of original B):
+### B Fragment from Row-Major Memory
+
+When B is stored in row-major format `B[row][col]`:
 
 ```cpp
 const int lane = threadIdx.x % 16;
 
-// Load row 'lane' from transposed B (= column 'lane' of original B)
+// Each lane loads its own COLUMN of B (all 16 K values)
+#pragma unroll
+for (int k = 0; k < 16; k++) {
+    b_frag[k] = B[16 * k + lane];  // B[k][lane] in row-major
+}
+```
+
+**Pattern**: Each lane loads column `lane`, iterating over all K rows.
+
+**From AMD GPUOpen example**:
+```cpp
+for (int ele = 0; ele < 16; ++ele) {
+    b_frag[ele] = b[16*ele + lane];  // Load column 'lane'
+}
+```
+
+### Loading from LDS with Transposed B
+
+When B is transposed in LDS as `B_lds[N][K]` (common optimization):
+
+```cpp
+const int lane = threadIdx.x % 16;
+
+// B is transposed: B_lds[n][k] = B_original[k][n]
+// Each lane loads row 'lane' from transposed B = column 'lane' of original B
 #pragma unroll
 for (int k = 0; k < 16; k++) {
     b_frag[k] = B_lds[col_offset + lane][k];
@@ -125,18 +167,30 @@ load_matrix_sync_lds_b_transposed(b_frag, &B_lds[warp_n_base][0], B_STRIDE);
 
 ## Storing C Fragment to Global Memory
 
+**From AMD GPUOpen example** (FP16 output with OPSEL=false):
 ```cpp
-const int lane = threadIdx.x;
-const int frag_col = lane % 16;
-const int frag_row_offset = lane / 16;  // 0 for lanes 0-15, 1 for lanes 16-31
+const int lane = threadIdx.x % 16;
+const int lIdx = threadIdx.x;
+
+for (int ele = 0; ele < 8; ++ele) {
+    const int r = ele * 2 + (lIdx / 16);
+    // For FP16 with OPSEL=false, use even indices
+    c[16 * r + lane] = c_frag[ele * 2];
+}
+```
+
+**For FP32 output** (v_wmma_f32_16x16x16_f16):
+```cpp
+const int lane = threadIdx.x % 16;
+const int lIdx = threadIdx.x;
 
 #pragma unroll
 for (int i = 0; i < 8; i++) {
-    int row = tile_row + i * 2 + frag_row_offset;
-    int col = tile_col + frag_col;
+    int row = tile_row + i * 2 + (lIdx / 16);
+    int col = tile_col + lane;
     
     if (row < M && col < N) {
-        C[row * N + col] = c_frag[i];
+        C[row * N + col] = c_frag[i];  // FP32: direct indexing
     }
 }
 ```
@@ -144,6 +198,9 @@ for (int i = 0; i < 8; i++) {
 **Pattern**:
 - Fragment index `i` maps to rows `i*2` (lanes 0-15) or `i*2+1` (lanes 16-31)
 - Column is always `lane % 16`
+- For FP16 output with OPSEL=false: use `c_frag[ele*2]`
+- For FP16 output with OPSEL=true: use `c_frag[ele*2 + 1]`
+- For FP32 output: use `c_frag[i]` directly
 
 ---
 
@@ -201,8 +258,10 @@ a_frag[i] = A_lds[row][threadIdx.x % 16];
 
 ### 2. Row vs Column Confusion
 
-A fragments need **columns** loaded (iterate rows, fixed column per lane).
-B fragments from transposed LDS need **rows** loaded (fixed row per lane, iterate K).
+**Correct loading patterns**:
+- **A fragments**: Each lane loads its own **row** of A (all 16 K values)
+- **B fragments**: Each lane loads its own **column** of B (all 16 K values)
+- **B from transposed LDS**: Each lane loads its own **row** from transposed B_lds
 
 ### 3. Manual Fragment Packing Errors
 
