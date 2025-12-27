@@ -145,26 +145,57 @@ To institutionalize correctness, use a **Deterministic Layout Probe**:
 
 ## Building
 
-### Using pip
+### Using Docker (Recommended)
+
+The project includes a Docker environment with ROCm 7.10, PyTorch, and all dependencies pre-configured for gfx1151.
+
+**1. Build the Docker image:**
+
+```bash
+cd /path/to/wmma_ops
+docker compose -f docker/docker-compose.benchmark.yml build
+```
+
+**2. Run the build and test suite:**
+
+```bash
+# Create .env file if it doesn't exist (required by docker-compose)
+touch .env
+
+# Build and test
+docker compose -f docker/docker-compose.benchmark.yml run --rm benchmark \
+  bash -c "export LD_LIBRARY_PATH=/opt/venv/lib/python3.12/site-packages/torch/lib:\$LD_LIBRARY_PATH && \
+           cd /workspace/wmma_ops && ./build_and_test.sh"
+```
+
+**3. Interactive development:**
+
+```bash
+# Start an interactive shell in the container
+docker compose -f docker/docker-compose.benchmark.yml run --rm benchmark bash
+
+# Inside the container:
+export LD_LIBRARY_PATH=/opt/venv/lib/python3.12/site-packages/torch/lib:$LD_LIBRARY_PATH
+cd /workspace/wmma_ops
+pip install -e . --no-build-isolation
+python test_rocwmma_patch.py
+```
+
+### Using pip (Host Installation)
+
+If you have ROCm and PyTorch installed on your host system:
 
 ```bash
 cd /path/to/wmma_ops
 pip install -e . --no-build-isolation
 ```
 
-### Using Docker (Optional)
-
-```bash
-docker run --rm -v "$(pwd)":/workspace/wmma_ops -w /workspace/wmma_ops <rocm-container> \
-  bash -lc "pip install -e . --no-build-isolation"
-```
-
 ### Build Requirements
 
 - **Toolkit**: ROCm 7.9 or 7.10-preview
-- HIP compiler (`hipcc`)
-- PyTorch with ROCm support
-- Target: gfx1151 (RDNA3.5)
+- **Compiler**: HIP compiler (`hipcc`)
+- **Python**: PyTorch with ROCm support
+- **Target**: gfx1151 (RDNA3.5 / Strix Halo)
 
 ---
 
@@ -237,7 +268,21 @@ wmma_ops.gemm_inplace(A, B, C, alpha=1.5, beta=0.3)
 
 ## Testing
 
-### Run Test Suite
+### Run Test Suite (Docker)
+
+```bash
+# Full build + test
+docker compose -f docker/docker-compose.benchmark.yml run --rm benchmark \
+  bash -c "export LD_LIBRARY_PATH=/opt/venv/lib/python3.12/site-packages/torch/lib:\$LD_LIBRARY_PATH && \
+           cd /workspace/wmma_ops && ./build_and_test.sh"
+
+# Or run tests only (after building)
+docker compose -f docker/docker-compose.benchmark.yml run --rm benchmark \
+  bash -c "export LD_LIBRARY_PATH=/opt/venv/lib/python3.12/site-packages/torch/lib:\$LD_LIBRARY_PATH && \
+           cd /workspace/wmma_ops && python test_rocwmma_patch.py"
+```
+
+### Run Test Suite (Host)
 
 ```bash
 python test_rocwmma_patch.py
