@@ -47,25 +47,46 @@ Older profiling tool, still useful for some metrics:
 rocprof --hip-trace --hsa-trace -o output.csv python your_script.py
 ```
 
-### 3. Omnitrace
+### 3. rocprofiler-systems (formerly Omnitrace)
 
-Comprehensive tracing with timeline visualization:
+Timeline tracing tool, now part of ROCm as `rocprofiler-systems`:
 ```bash
-omnitrace-python -- python your_script.py
-# View output in Perfetto UI (https://ui.perfetto.dev)
+# Check if installed
+apt-get install rocprofiler-systems
+
+# Note: May conflict with PyTorch ROCm initialization
+# Use rocprofv2 with Perfetto plugin instead for most cases
 ```
 
-### 4. Radeon GPU Profiler (RGP)
+### 4. Radeon Developer Tool Suite
 
-Best for RDNA3 detailed analysis. Requires:
-- Radeon Developer Panel on host
-- RGP GUI for analysis
+Installed in the profiling container at `/opt/radeon/rdts/`. Includes:
 
-Features:
-- Instruction-level timing
-- Wavefront occupancy visualization
-- Memory counter analysis
-- ISA disassembly
+| Tool | Description | Headless |
+|------|-------------|----------|
+| **RGA** (Radeon GPU Analyzer) | Shader/kernel ISA analysis | ✅ Yes |
+| **RGD** (Radeon GPU Detective) | Crash dump analysis | ✅ Yes |
+| **RGP** (Radeon GPU Profiler) | Timeline profiling | ❌ GUI |
+| **RDP** (Radeon Developer Panel) | Capture control | ❌ GUI |
+| **RMV** (Radeon Memory Visualizer) | Memory analysis | ❌ GUI |
+
+**RGA Usage (headless):**
+```bash
+# List supported targets
+rga -s rocm-cl -l
+
+# Analyze shader ISA
+rga -s rocm-cl --isa output.isa -c gfx1151 shader.cl
+```
+
+**RGP Usage (requires X11):**
+```bash
+# Start developer service
+RadeonDeveloperServiceCLI --port 27300
+
+# Use RadeonDeveloperPanel GUI to capture traces
+# Analyze .rgp files in RadeonGPUProfiler GUI
+```
 
 ## ⚠️ Important: gfx1151 Profiling Limitations
 

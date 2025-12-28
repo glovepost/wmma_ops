@@ -103,8 +103,24 @@ RUN pip install \
     psutil \
     perfetto
 
-# Install omnitrace for timeline tracing (if available)
-RUN pip install omnitrace || echo "omnitrace not available via pip, will use rocprof"
+# Install rocprofiler-systems (formerly omnitrace) for timeline tracing
+RUN apt-get update && apt-get install -y --no-install-recommends rocprofiler-systems \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Radeon Developer Tool Suite (RGP, RDP, RGA, RMV)
+# Note: RGP/RDP require X11/GUI - use for trace capture, analyze on host
+# RGA (GPU Analyzer) works headless for shader analysis
+RUN mkdir -p /opt/radeon && cd /opt/radeon && \
+    wget -q https://gpuopen.com/download/RadeonDeveloperToolSuite-2025-12-08-1746.tgz -O rdts.tgz && \
+    tar -xzf rdts.tgz && \
+    rm rdts.tgz && \
+    mv RadeonDeveloperToolSuite-* rdts && \
+    ln -sf /opt/radeon/rdts/rga /usr/local/bin/rga && \
+    ln -sf /opt/radeon/rdts/rgd /usr/local/bin/rgd && \
+    ln -sf /opt/radeon/rdts/RadeonDeveloperServiceCLI /usr/local/bin/RadeonDeveloperServiceCLI && \
+    echo "Radeon Developer Tool Suite installed to /opt/radeon/rdts"
+
+ENV PATH="/opt/radeon/rdts:$PATH"
 
 # Create profiling scripts directory
 RUN mkdir -p /workspace/profiling /workspace/traces
