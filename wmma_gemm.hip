@@ -6,6 +6,7 @@
 #include "wmma_tile_selection.hpp"
 #include "wmma_tile_mapping.hpp"
 #include "wmma_kernels_optimized.hpp"
+#include "flash_attention.hpp"
 
 using namespace rocwmma;
 
@@ -2069,6 +2070,105 @@ torch::Tensor wmma_matmul_coop(torch::Tensor A, torch::Tensor B) {
     return C;
 }
 
+// ============================================================================
+// FLASH ATTENTION FORWARD
+// ============================================================================
+
+torch::Tensor flash_attention_forward(
+    torch::Tensor Q,  // [B, H, N, D] or [B, N, H, D]
+    torch::Tensor K,
+    torch::Tensor V,
+    bool causal,
+    float scale
+) {
+    TORCH_CHECK(Q.is_cuda() && K.is_cuda() && V.is_cuda(), "Inputs must be CUDA tensors");
+    TORCH_CHECK(Q.device() == K.device() && K.device() == V.device(), "Inputs must be on same device");
+    TORCH_CHECK(Q.dtype() == torch::kFloat16, "Q must be float16");
+    TORCH_CHECK(K.dtype() == torch::kFloat16, "K must be float16");
+    TORCH_CHECK(V.dtype() == torch::kFloat16, "V must be float16");
+    TORCH_CHECK(Q.dim() == 4, "Q must be 4D [B, H, N, D]");
+    TORCH_CHECK(K.dim() == 4, "K must be 4D [B, H, N, D]");
+    TORCH_CHECK(V.dim() == 4, "V must be 4D [B, H, N, D]");
+    
+    Q = Q.contiguous();
+    K = K.contiguous();
+    V = V.contiguous();
+    
+    const int B = Q.size(0);      // Batch size
+    const int H = Q.size(1);      // Number of heads
+    const int N_q = Q.size(2);    // Query sequence length
+    const int D = Q.size(3);      // Head dimension
+    const int N_kv = K.size(2);   // Key/Value sequence length
+    
+    TORCH_CHECK(K.size(0) == B && V.size(0) == B, "Batch sizes must match");
+    TORCH_CHECK(K.size(1) == H && V.size(1) == H, "Number of heads must match");
+    TORCH_CHECK(K.size(3) == D && V.size(3) == D, "Head dimensions must match");
+    
+    // Block sizes - must be multiples of 16 for WMMA
+    const int Br = 32;  // Query block size
+    const int Bc = 32;  // Key block size
+    
+    // Pad sequence lengths to multiples of block size
+    const int N_q_pad = ((N_q + Br - 1) / Br) * Br;
+    const int N_kv_pad = ((N_kv + Bc - 1) / Bc) * Bc;
+    const int D_pad = ((D + 15) / 16) * 16;
+    
+    // Compute scale if not provided
+    if (scale < 0) {
+        scale = 1.0f / sqrtf(static_cast<float>(D));
+    }
+    // Note: scale is just 1/sqrt(D), no exp2 optimization in simple kernel
+    
+    // Allocate output
+    auto O = torch::zeros({B, H, N_q, D}, torch::dtype(torch::kFloat16).device(Q.device()));
+    
+    // Allocate logsumexp for backward (optional, can be nullptr)
+    auto L = torch::empty({B, H, N_q}, torch::dtype(torch::kFloat32).device(Q.device()));
+    
+    const __half* Q_ptr = reinterpret_cast<const __half*>(Q.data_ptr<at::Half>());
+    const __half* K_ptr = reinterpret_cast<const __half*>(K.data_ptr<at::Half>());
+    const __half* V_ptr = reinterpret_cast<const __half*>(V.data_ptr<at::Half>());
+    __half* O_ptr = reinterpret_cast<__half*>(O.data_ptr<at::Half>());
+    float* L_ptr = L.data_ptr<float>();
+    
+    hipStream_t stream = c10::hip::getCurrentHIPStream(Q.device().index()).stream();
+    
+    // Grid: (batch, head, num_q_blocks)
+    constexpr int THREADS_PER_BLOCK = 256;
+    const int num_q_blocks = (N_q + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    dim3 grid(B, H, num_q_blocks);
+    dim3 block(THREADS_PER_BLOCK);
+    
+    // Strides
+    const int64_t stride_qb = Q.stride(0);
+    const int64_t stride_qh = Q.stride(1);
+    const int64_t stride_qn = Q.stride(2);
+    const int64_t stride_kb = K.stride(0);
+    const int64_t stride_kh = K.stride(1);
+    const int64_t stride_kn = K.stride(2);
+    
+    if (causal) {
+        flash_attention_fwd_kernel_simple<true><<<grid, block, 0, stream>>>(
+            Q_ptr, K_ptr, V_ptr, O_ptr,
+            N_q, N_kv, D,
+            stride_qb, stride_qh, stride_qn,
+            stride_kb, stride_kh, stride_kn,
+            scale
+        );
+    } else {
+        flash_attention_fwd_kernel_simple<false><<<grid, block, 0, stream>>>(
+            Q_ptr, K_ptr, V_ptr, O_ptr,
+            N_q, N_kv, D,
+            stride_qb, stride_qh, stride_qn,
+            stride_kb, stride_kh, stride_kn,
+            scale
+        );
+    }
+    
+    C10_HIP_KERNEL_LAUNCH_CHECK();
+    return O;
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // Original matmul functions (C = A × B)
     m.def("matmul", &wmma_matmul, "WMMA GEMM (FP16→FP32) - 21 TFLOPS on gfx1151");
@@ -2103,5 +2203,12 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           py::arg("A"), py::arg("B"),
           py::arg("alpha") = 1.0, py::arg("beta") = 0.0,
           py::arg("C") = py::none());
+    
+    // Flash Attention
+    m.def("flash_attention", &flash_attention_forward,
+          "Flash Attention v2 forward pass (FP16)",
+          py::arg("Q"), py::arg("K"), py::arg("V"),
+          py::arg("causal") = false,
+          py::arg("scale") = -1.0f);
 }
 
