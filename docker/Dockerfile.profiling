@@ -1,0 +1,501 @@
+# ROCm 7.9 Profiling Container for gfx1151 (Strix Halo / Ryzen AI Max)
+# Purpose: GPU kernel profiling and debugging with rocprofv3, omnitrace, etc.
+#
+# Includes:
+# - rocprofiler-sdk (rocprofv3) for hardware counters and tracing
+# - omnitrace for timeline visualization
+# - roctracer for API tracing
+# - All tools needed for deep kernel analysis
+
+FROM ubuntu:24.04
+
+# Prevent interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# GPU/ROCm environment
+ENV PYTORCH_ROCM_ARCH=gfx1151
+ENV HIP_VISIBLE_DEVICES=0
+
+# Profiling-specific environment
+# NOTE: Hardware profiling counters (aqlprofile) are NOT available on gfx1151 consumer GPUs
+# HSA_TOOLS_LIB is intentionally unset to avoid "aqlprofile API table load failed" errors
+# Use timing-based profiling instead of hardware counters
+ENV ROCPROFILER_LOG_LEVEL=warning
+
+# Python environment
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# Install base dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    sudo \
+    wget \
+    curl \
+    git \
+    ca-certificates \
+    python3.12 \
+    python3.12-venv \
+    python3.12-dev \
+    build-essential \
+    cmake \
+    gnupg2 \
+    vim \
+    less \
+    jq \
+    && rm -rf /var/lib/apt/lists/*
+
+# Add ROCm APT repository
+RUN mkdir -p /etc/apt/keyrings && \
+    wget -q -O - https://repo.radeon.com/rocm/rocm.gpg.key | gpg --dearmor > /etc/apt/keyrings/rocm.gpg && \
+    echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/6.3 jammy main" > /etc/apt/sources.list.d/rocm.list && \
+    printf 'Package: *\nPin: release o=repo.radeon.com\nPin-Priority: 600\n' > /etc/apt/preferences.d/rocm-pin-600
+
+# Install ROCm profiling tools from APT (ROCm 6.3)
+# These provide the base profiling infrastructure
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    rocm-llvm \
+    hipcc \
+    rocm-hip-runtime-dev \
+    rocthrust-dev \
+    rocprofiler-dev \
+    roctracer-dev \
+    rocm-smi-lib \
+    && rm -rf /var/lib/apt/lists/*
+
+# Add HIP to PATH
+ENV PATH="/opt/rocm/bin:/opt/rocm/llvm/bin:$PATH"
+ENV HIP_PATH="/opt/rocm"
+ENV ROCM_PATH="/opt/rocm"
+ENV LD_LIBRARY_PATH="/opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/lib:/opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/lib/host-math/lib:/opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/lib/roctracer/lib:/opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/lib/rocm_sysdeps/lib:/opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/lib/llvm/lib:/opt/venv/lib/python3.12/site-packages/_rocm_sdk_libraries_gfx1151/lib:/opt/rocm/lib:/opt/rocm/hip/lib:$LD_LIBRARY_PATH"
+
+# Make python3.12 the default
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1 \
+    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
+
+# Create working directory
+WORKDIR /workspace
+
+# Create Python virtual environment
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Upgrade pip
+RUN pip install --upgrade pip setuptools wheel
+
+# Install ROCm 7.9 via pip (gfx1151 wheel for Ryzen AI Max)
+RUN pip install --index-url https://repo.amd.com/rocm/whl/gfx1151/ "rocm[libraries,devel]"
+
+# Install PyTorch from gfx1151-optimized wheel
+RUN pip install --index-url https://repo.amd.com/rocm/whl/gfx1151/ \
+    torch \
+    torchvision \
+    torchaudio
+
+# Install profiling and analysis tools
+RUN pip install \
+    numpy \
+    pandas \
+    matplotlib \
+    seaborn \
+    rich \
+    tqdm \
+    py-cpuinfo \
+    psutil \
+    perfetto
+
+# Install omnitrace for timeline tracing (if available)
+RUN pip install omnitrace || echo "omnitrace not available via pip, will use rocprof"
+
+# Create profiling scripts directory
+RUN mkdir -p /workspace/profiling /workspace/traces
+
+# ============================================================================
+# PROFILING HELPER SCRIPTS
+# ============================================================================
+
+# Script to list available hardware counters
+COPY --chmod=755 <<'EOF' /workspace/profiling/list_counters.sh
+#!/bin/bash
+# List available hardware counters for gfx1151
+echo "=== Available Hardware Counters for gfx1151 ==="
+echo ""
+
+# Try rocprofv3 first (ROCm 7.x)
+if command -v rocprofv3 &> /dev/null; then
+    echo "Using rocprofv3:"
+    rocprofv3 --list-counters 2>/dev/null | head -100
+else
+    # Fall back to rocprof (ROCm 6.x)
+    echo "Using rocprof:"
+    rocprof --list-basic 2>/dev/null
+    echo ""
+    echo "Derived metrics:"
+    rocprof --list-derived 2>/dev/null | head -50
+fi
+EOF
+
+# Script to profile a Python command with basic tracing
+COPY --chmod=755 <<'EOF' /workspace/profiling/trace_kernel.sh
+#!/bin/bash
+# Profile a Python command with HIP kernel tracing
+# Usage: ./trace_kernel.sh "python script.py"
+
+OUTPUT_DIR="${OUTPUT_DIR:-/workspace/traces}"
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+OUTPUT_PREFIX="${OUTPUT_DIR}/trace_${TIMESTAMP}"
+
+mkdir -p "$OUTPUT_DIR"
+
+echo "=== Profiling with HIP Trace ==="
+echo "Output: ${OUTPUT_PREFIX}"
+echo "Command: $@"
+echo ""
+
+# Try rocprofv3 first
+if command -v rocprofv3 &> /dev/null; then
+    rocprofv3 --hip-trace \
+              --hip-runtime-trace \
+              --output-directory "$OUTPUT_DIR" \
+              --output-file "trace_${TIMESTAMP}" \
+              -- "$@"
+else
+    # Fall back to rocprof
+    rocprof --hip-trace \
+            --hsa-trace \
+            -o "${OUTPUT_PREFIX}.csv" \
+            "$@"
+fi
+
+echo ""
+echo "=== Trace Complete ==="
+echo "Results saved to: ${OUTPUT_DIR}"
+ls -la "${OUTPUT_DIR}"/*${TIMESTAMP}* 2>/dev/null || ls -la "${OUTPUT_PREFIX}"* 2>/dev/null
+EOF
+
+# Script to collect hardware counters
+COPY --chmod=755 <<'EOF' /workspace/profiling/collect_counters.sh
+#!/bin/bash
+# Collect hardware counters for kernel analysis
+# Usage: ./collect_counters.sh "python script.py" [counter_file]
+
+OUTPUT_DIR="${OUTPUT_DIR:-/workspace/traces}"
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+COUNTER_FILE="${2:-/workspace/profiling/counters_basic.txt}"
+
+mkdir -p "$OUTPUT_DIR"
+
+echo "=== Collecting Hardware Counters ==="
+echo "Counter file: ${COUNTER_FILE}"
+echo "Command: $1"
+echo ""
+
+if command -v rocprofv3 &> /dev/null; then
+    # ROCm 7.x style
+    COUNTERS=$(cat "$COUNTER_FILE" | grep -v '^#' | tr '\n' ',' | sed 's/,$//')
+    rocprofv3 --counter "$COUNTERS" \
+              --output-directory "$OUTPUT_DIR" \
+              --output-file "counters_${TIMESTAMP}" \
+              -- $1
+else
+    # ROCm 6.x style
+    rocprof -i "$COUNTER_FILE" \
+            -o "${OUTPUT_DIR}/counters_${TIMESTAMP}.csv" \
+            $1
+fi
+
+echo ""
+echo "=== Counter Collection Complete ==="
+ls -la "${OUTPUT_DIR}"/*${TIMESTAMP}*
+EOF
+
+# Basic counter set for WMMA kernel analysis
+COPY --chmod=644 <<'EOF' /workspace/profiling/counters_basic.txt
+# Basic counters for WMMA kernel profiling on gfx1151
+# Wavefront and instruction counters
+SQ_WAVES
+SQ_INSTS_VALU
+SQ_INSTS_SALU
+SQ_INSTS_LDS
+SQ_INSTS_SMEM
+SQ_INSTS_VMEM
+
+# Wait/stall counters
+SQ_WAIT_INST_LDS
+SQ_WAIT_INST_VALU
+
+# Memory counters
+TCC_HIT
+TCC_MISS
+TCC_EA_RDREQ
+TCC_EA_WRREQ
+EOF
+
+# Extended counter set for detailed analysis
+COPY --chmod=644 <<'EOF' /workspace/profiling/counters_extended.txt
+# Extended counters for detailed WMMA analysis
+# Shader processor
+SQ_WAVES
+SQ_INSTS_VALU
+SQ_INSTS_SALU
+SQ_INSTS_LDS
+SQ_INSTS_SMEM
+SQ_INSTS_VMEM
+SQ_INSTS_FLAT
+SQ_INSTS_BRANCH
+
+# LDS (Local Data Share) - critical for WMMA
+SQ_LDS_BANK_CONFLICT
+SQ_WAIT_INST_LDS
+
+# Vector ALU utilization
+SQ_VALU_MFMA_MOPS
+
+# Cache hierarchy
+TCC_HIT
+TCC_MISS
+TCC_EA_RDREQ
+TCC_EA_WRREQ
+TCP_TOTAL_ACCESSES
+TCP_TOTAL_READ
+TCP_TOTAL_WRITE
+
+# Memory controller
+GRBM_COUNT
+GRBM_GUI_ACTIVE
+EOF
+
+# Python profiling wrapper script
+COPY --chmod=755 <<'EOF' /workspace/profiling/profile_wmma.py
+#!/usr/bin/env python3
+"""
+Profile WMMA kernels with detailed timing and optional hardware counters.
+
+Usage:
+    python profile_wmma.py                    # Basic timing
+    python profile_wmma.py --detailed         # Per-kernel breakdown
+    python profile_wmma.py --sizes 1024,2048  # Custom sizes
+"""
+import argparse
+import subprocess
+import sys
+import os
+import time
+import json
+from pathlib import Path
+
+def run_with_rocprof(cmd, output_dir, counters=None):
+    """Run command with rocprof tracing."""
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    
+    if counters:
+        # Hardware counter collection
+        counter_str = ",".join(counters)
+        rocprof_cmd = [
+            "rocprofv3" if os.path.exists("/usr/bin/rocprofv3") else "rocprof",
+            "--counter", counter_str,
+            "--output-directory", output_dir,
+            "--output-file", f"counters_{timestamp}",
+            "--"
+        ] + cmd
+    else:
+        # HIP trace only
+        rocprof_cmd = [
+            "rocprofv3" if os.path.exists("/usr/bin/rocprofv3") else "rocprof",
+            "--hip-trace",
+            "--output-directory", output_dir,
+            "--output-file", f"trace_{timestamp}",
+            "--"
+        ] + cmd
+    
+    print(f"Running: {' '.join(rocprof_cmd)}")
+    result = subprocess.run(rocprof_cmd, capture_output=False)
+    return result.returncode
+
+def profile_wmma_kernels(sizes, output_dir, detailed=False):
+    """Profile WMMA kernels at various sizes."""
+    import torch
+    
+    # Ensure wmma_ops is importable
+    sys.path.insert(0, '/workspace/wmma_ops')
+    try:
+        import wmma_ops
+    except ImportError:
+        print("ERROR: wmma_ops not found. Build with: pip install -e /workspace/wmma_ops")
+        return
+    
+    results = []
+    
+    for size in sizes:
+        M, N, K = size, size, size
+        print(f"\n{'='*60}")
+        print(f"Profiling {M}x{N}x{K}")
+        print('='*60)
+        
+        A = torch.randn(M, K, device='cuda', dtype=torch.float16)
+        B = torch.randn(K, N, device='cuda', dtype=torch.float16)
+        
+        # Warmup
+        for _ in range(5):
+            _ = wmma_ops.matmul(A, B)
+        torch.cuda.synchronize()
+        
+        # Benchmark each kernel
+        kernels = ['matmul', 'matmul_adaptive', 'matmul_zerocopy']
+        if detailed:
+            kernels.extend(['matmul_kunroll', 'matmul_native', 'matmul_coop'])
+        
+        for kernel_name in kernels:
+            try:
+                kernel_fn = getattr(wmma_ops, kernel_name)
+            except AttributeError:
+                continue
+            
+            # Time the kernel
+            iterations = 20
+            torch.cuda.synchronize()
+            start = time.perf_counter()
+            for _ in range(iterations):
+                _ = kernel_fn(A, B)
+            torch.cuda.synchronize()
+            elapsed = (time.perf_counter() - start) / iterations
+            
+            flops = 2 * M * N * K
+            tflops = flops / elapsed / 1e12
+            
+            result = {
+                'size': f'{M}x{N}x{K}',
+                'kernel': kernel_name,
+                'time_ms': elapsed * 1000,
+                'tflops': tflops
+            }
+            results.append(result)
+            print(f"  {kernel_name:20s}: {elapsed*1000:7.3f} ms, {tflops:6.2f} TFLOPS")
+    
+    # Save results
+    output_file = Path(output_dir) / f"wmma_profile_{time.strftime('%Y%m%d_%H%M%S')}.json"
+    with open(output_file, 'w') as f:
+        json.dump(results, f, indent=2)
+    print(f"\nResults saved to: {output_file}")
+    
+    return results
+
+def main():
+    parser = argparse.ArgumentParser(description='Profile WMMA kernels')
+    parser.add_argument('--sizes', type=str, default='1024,2048,4096',
+                        help='Comma-separated matrix sizes')
+    parser.add_argument('--detailed', action='store_true',
+                        help='Profile all kernel variants')
+    parser.add_argument('--output-dir', type=str, default='/workspace/traces',
+                        help='Output directory for traces')
+    parser.add_argument('--counters', action='store_true',
+                        help='Collect hardware counters (requires rocprof)')
+    args = parser.parse_args()
+    
+    sizes = [int(s) for s in args.sizes.split(',')]
+    os.makedirs(args.output_dir, exist_ok=True)
+    
+    if args.counters:
+        # Run with rocprof for hardware counters
+        cmd = [sys.executable, __file__, '--sizes', args.sizes]
+        if args.detailed:
+            cmd.append('--detailed')
+        counters = ['SQ_WAVES', 'SQ_INSTS_VALU', 'SQ_INSTS_LDS', 'TCC_HIT', 'TCC_MISS']
+        run_with_rocprof(cmd, args.output_dir, counters)
+    else:
+        # Direct profiling
+        profile_wmma_kernels(sizes, args.output_dir, args.detailed)
+
+if __name__ == '__main__':
+    main()
+EOF
+
+# Environment check script for profiling
+COPY --chmod=755 <<'EOF' /workspace/profiling/check_profiling_env.py
+#!/usr/bin/env python3
+"""Check profiling environment and available tools."""
+import subprocess
+import shutil
+import sys
+
+print("=" * 60)
+print("ROCm Profiling Environment Check")
+print("=" * 60)
+
+# Check rocprof tools
+print("\n[1] Profiling Tools:")
+tools = [
+    ('rocprofv3', 'ROCm 7.x profiler (recommended)'),
+    ('rocprof', 'ROCm 6.x profiler (legacy)'),
+    ('rocm-smi', 'GPU monitoring'),
+    ('hipcc', 'HIP compiler'),
+]
+
+for tool, desc in tools:
+    path = shutil.which(tool)
+    status = f"✅ {path}" if path else "❌ Not found"
+    print(f"  {tool:15s} {status:40s} - {desc}")
+
+# Check omnitrace
+print("\n[2] Omnitrace:")
+try:
+    import omnitrace
+    print(f"  ✅ omnitrace available (Python module)")
+except ImportError:
+    omnitrace_bin = shutil.which('omnitrace-python')
+    if omnitrace_bin:
+        print(f"  ✅ omnitrace-python: {omnitrace_bin}")
+    else:
+        print("  ❌ omnitrace not available")
+
+# Check PyTorch
+print("\n[3] PyTorch:")
+import torch
+print(f"  Version: {torch.__version__}")
+print(f"  ROCm available: {torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    print(f"  Device: {torch.cuda.get_device_name(0)}")
+
+# Check wmma_ops
+print("\n[4] WMMA Ops:")
+sys.path.insert(0, '/workspace/wmma_ops')
+try:
+    import wmma_ops
+    print("  ✅ wmma_ops loaded successfully")
+    funcs = [f for f in dir(wmma_ops) if f.startswith('matmul')]
+    print(f"  Available kernels: {len(funcs)}")
+except ImportError as e:
+    print(f"  ❌ wmma_ops not available: {e}")
+    print("  Build with: pip install -e /workspace/wmma_ops --no-build-isolation")
+
+# Check counter availability
+print("\n[5] Hardware Counters:")
+try:
+    result = subprocess.run(['rocprofv3', '--list-counters'], 
+                          capture_output=True, text=True, timeout=10)
+    if result.returncode == 0:
+        lines = result.stdout.strip().split('\n')
+        print(f"  ✅ {len(lines)} counters available")
+    else:
+        print("  ⚠️ rocprofv3 --list-counters failed")
+except (FileNotFoundError, subprocess.TimeoutExpired):
+    try:
+        result = subprocess.run(['rocprof', '--list-basic'], 
+                              capture_output=True, text=True, timeout=10)
+        if result.returncode == 0:
+            print("  ✅ rocprof counters available (legacy)")
+    except:
+        print("  ❌ No counter listing available")
+
+print("\n" + "=" * 60)
+print("Profiling environment check complete!")
+print("\nQuick start:")
+print("  1. Build wmma_ops: pip install -e /workspace/wmma_ops --no-build-isolation")
+print("  2. Run profiler:   python /workspace/profiling/profile_wmma.py")
+print("  3. View traces:    ls /workspace/traces/")
+EOF
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import torch; assert torch.cuda.is_available()"
+
+CMD ["python", "/workspace/profiling/check_profiling_env.py"]

@@ -1,0 +1,117 @@
+# ROCm Profiling Environment for gfx1151
+# Purpose: GPU kernel profiling and debugging with rocprofv3, omnitrace, etc.
+#
+# Usage:
+#   docker compose -f docker/docker-compose.profiling.yml build
+#   docker compose -f docker/docker-compose.profiling.yml run profiling
+#
+# Profiling commands inside container:
+#   python /workspace/profiling/check_profiling_env.py    # Check environment
+#   python /workspace/profiling/profile_wmma.py           # Profile WMMA kernels
+#   ./profiling/trace_kernel.sh "python script.py"        # Trace any script
+#   ./profiling/collect_counters.sh "python script.py"    # Hardware counters
+
+services:
+  profiling:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.profiling
+    image: rocm79-profiling:gfx1151
+    container_name: rocm-profiling
+    network_mode: "host"
+
+    # ROCm GPU access
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - video
+
+    # Security for ROCm profiling (requires elevated permissions)
+    security_opt:
+      - seccomp:unconfined
+    cap_add:
+      - SYS_PTRACE
+      - SYS_ADMIN
+
+    # Environment
+    environment:
+      # ROCm settings
+      - PYTORCH_ROCM_ARCH=gfx1151
+      - HIP_VISIBLE_DEVICES=0
+
+      # Profiling settings
+      - ROCPROFILER_LOG_LEVEL=warning
+      - HSA_TOOLS_LIB=/opt/rocm/lib/librocprofiler64.so
+
+      # Disable TunableOp during profiling for consistent results
+      - PYTORCH_TUNABLEOP_ENABLED=0
+
+      # Memory settings
+      - PYTORCH_ALLOC_CONF=garbage_collection_threshold:0.9,max_split_size_mb:512
+
+      # AMD RDNA stability
+      - HIP_FORCE_DEV_KERNARG=1
+
+    # Mount volumes
+    volumes:
+      # Project source code
+      - ..:/workspace/wmma_ops
+
+      # Profiling output (persisted on host)
+      - ../traces:/workspace/traces
+
+      # Shared profiling scripts
+      - ./profiling_scripts:/workspace/profiling_scripts:ro
+
+    # Shared memory
+    shm_size: '8gb'
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 64g
+
+    # Interactive by default
+    stdin_open: true
+    tty: true
+
+    # Default command
+    command: ["python", "/workspace/profiling/check_profiling_env.py"]
+
+  # Convenience service for quick profiling
+  profile:
+    extends:
+      service: profiling
+    command: >
+      bash -c "
+        export LD_LIBRARY_PATH=/opt/venv/lib/python3.12/site-packages/torch/lib:\$LD_LIBRARY_PATH &&
+        cd /workspace/wmma_ops &&
+        pip install -e . --no-build-isolation -q &&
+        python /workspace/profiling/profile_wmma.py --sizes 2048,4096 --detailed
+      "
+
+  # Service for collecting hardware counters
+  counters:
+    extends:
+      service: profiling
+    command: >
+      bash -c "
+        export LD_LIBRARY_PATH=/opt/venv/lib/python3.12/site-packages/torch/lib:\$LD_LIBRARY_PATH &&
+        cd /workspace/wmma_ops &&
+        pip install -e . --no-build-isolation -q &&
+        /workspace/profiling/collect_counters.sh 'python /workspace/profiling/profile_wmma.py --sizes 2048'
+      "
+
+  # Service for HIP API tracing
+  trace:
+    extends:
+      service: profiling
+    command: >
+      bash -c "
+        export LD_LIBRARY_PATH=/opt/venv/lib/python3.12/site-packages/torch/lib:\$LD_LIBRARY_PATH &&
+        cd /workspace/wmma_ops &&
+        pip install -e . --no-build-isolation -q &&
+        /workspace/profiling/trace_kernel.sh 'python /workspace/profiling/profile_wmma.py --sizes 2048'
+      "

@@ -45,29 +45,31 @@ wmma_ops*.so
 build/
 _skbuild/
 
-# Tuning artifacts
-tunableop_results*.csv
-*.tunableop
-
 # Temporary files
 *.tmp
 *.temp
 *.log
 
-# Profiling
-*.csv
-*.json
-!docker-compose*.yml
+# Profiling outputs
 *.prof
 *.nsys-rep
 *.ncu-rep
+traces/
+runs/
+
+# HIP/ROCm build artifacts in root
+*.out
+*.out.resolution.txt
+*.hipi
+*.hipfb
+tunableop_results*.csv
+*.tunableop
 
 # Environment files (may contain secrets)
 .env
 
-# Benchmark results (optional - uncomment to track)
-# benchmark_results/
-# runs/
+# Benchmark results
+benchmark_results/
 
 # macOS
 .DS_Store
