@@ -73,6 +73,7 @@ All 12 kernel variants pass correctness tests (< 1% relative error):
 | **matmul_quad** | 4.04 | 17.01 | 28.6% | ✅ |
 | **matmul_hilbert** | 5.16 | 13.33 | 22.4% | ✅ |
 | **matmul_highOcc** | 6.68 | 10.28 | 17.3% | ✅ |
+| **matmul_coop** | 3.44 | 19.98 | 33.6% | ✅ New |
 | **PyTorch (reference)** | 1.92 | 35.86 | 60.4% | — |
 
 **Peak Theoretical**: 59.4 TFLOPS (gfx1151 FP16 WMMA)
@@ -207,6 +208,7 @@ print(f"Max error: {(C - C_ref).abs().max().item()}")
 | `wmma_ops.matmul_hilbert(A, B)` | Hilbert curve tile mapping for L2 locality |
 | `wmma_ops.matmul_swizzled(A, B)` | XOR-swizzled LDS (bank conflict-free) |
 | `wmma_ops.matmul_xor_optimized(A, B)` | Optimized XOR swizzle variant |
+| `wmma_ops.matmul_coop(A, B)` | Cooperative loading (half threads load A, half load B) |
 
 #### BLAS-Style GEMM (C = α × A × B + β × C)
 
@@ -470,7 +472,23 @@ Where `f(row)` is chosen such that threads accessing different rows but same log
 - XOR Swizzle: 12,288 bytes
 - **Savings: 6,144 bytes (33%)**
 
-**Status**: ✅ Implemented and working in `wmma_xor_swizzle.hpp`. Fixed fragment loading pattern to load ROW (all K values) instead of COLUMN.
+**Status**: ✅ Implemented and correct in `wmma_xor_swizzle.hpp`, but **slower than padding** (~15-20% slower).
+
+#### Performance Analysis: XOR Swizzle vs Padding
+
+| Approach | TFLOPS | LDS Usage | Bank Conflicts |
+|----------|--------|-----------|----------------|
+| **Padding (stride=24)** | 20-21 | 18.4 KB | Low (stride breaks alignment) |
+| **XOR Swizzle (stride=16)** | 17-18 | 12.3 KB | None (mathematically eliminated) |
+
+**Why XOR Swizzle is Slower:**
+
+1. **B matrix transpose stores**: Each scalar store requires computing `Swizzle::to_physical()` (division, modulo, XOR)
+2. **Flat 1D array indexing**: More VALU overhead than 2D array with padding
+3. **RDNA3 LDS bank conflict penalty**: May not be severe enough to justify swizzle computation overhead
+4. **Compiler optimization**: 2D arrays with padding are easier for the compiler to optimize
+
+**Recommendation**: Use **padding approach** for gfx1151. The 33% LDS savings from XOR swizzle doesn't compensate for the ~15-20% performance loss.
 
 #### Critical Implementation Fixes for XOR Swizzle
 
@@ -797,6 +815,19 @@ The theoretical maximum without vendor-level assembly optimization is approximat
 4. **Compiler scheduling is smart**: Inline assembly attempts didn't improve on LLVM's scheduling
 5. **LDS transpose is required**: `col_major` B fragments need transposed data
 6. **Odd strides hurt more than help**: Bank conflict avoidance via odd strides forces scalar access
+
+### Optimization Attempts (December 2025)
+
+Several optimizations from the development notes were attempted:
+
+| Optimization | Result | Notes |
+|-------------|--------|-------|
+| **Vectorized C Writes** | ❌ 0.72x slower | Extra 32KB LDS + sync overhead hurt more than coalescing helped |
+| **Cooperative Loading** | ⚖️ 1.01-1.06x | Marginal gains at small K, slight regression at large K |
+| **BLOCK_K=32 (K-unroll)** | ❌ 0.89-0.97x | Increased LDS/register pressure hurt occupancy |
+| **XOR Swizzle LDS** | ❌ 0.85x slower | Swizzle computation overhead > bank conflict savings |
+
+**Conclusion**: The standard kernel is already well-optimized with double-buffered LDS, interleaved prefetch, and LDS padding. Further gains likely require split-K parallelism or assembly-level tuning.
 
 ---
 

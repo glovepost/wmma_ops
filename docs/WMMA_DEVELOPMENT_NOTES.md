@@ -2343,3 +2343,181 @@ When debugging XOR swizzles or fragment mapping, isolate the following primitive
 - **Epilogue Dump**: WMMA Accumulator → Global memory using a known test pattern.
 
 Using deterministic patterns (`A[row,col] = row*256 + col`) during these tests ensures that bugs in swizzle math, lane replication, or epilogue mapping are identified in minutes rather than hours.
+
+---
+
+## XOR Swizzle vs Padding: Performance Analysis (December 2025)
+
+### Summary
+
+After implementing and benchmarking XOR swizzle for LDS bank conflict elimination, we found that **padding outperforms XOR swizzle by 15-20%** on gfx1151.
+
+### Benchmark Results
+
+| Approach | TFLOPS | LDS Usage | Ratio |
+|----------|--------|-----------|-------|
+| **Padding (stride=24)** | 20-21 | 18.4 KB | 1.00x |
+| **XOR Swizzle (stride=16)** | 17-18 | 12.3 KB | 0.85x |
+
+### Root Cause Analysis
+
+1. **B Matrix Transpose Stores**: The swizzled kernel requires per-element swizzle computation during B matrix transpose stores:
+   ```cpp
+   // Swizzled: 8 scalar stores with index computation per thread
+   for (int i = 0; i < 8; i++) {
+       int phys_idx = Swizzle::to_physical(n_idx, b_k, B_STRIDE);  // Division, modulo, XOR
+       B_lds[phys_idx] = data[i];
+   }
+   
+   // Padded: 8 scalar stores with simple 2D indexing
+   for (int i = 0; i < 8; i++) {
+       B_lds[b_n + i][b_k] = data[i];  // Compiler optimizes 2D array access
+   }
+   ```
+
+2. **Flat 1D Array Indexing**: The swizzled kernel uses flat 1D arrays with computed indices, while the padded kernel uses 2D arrays that the compiler can optimize better.
+
+3. **RDNA3 LDS Bank Conflict Penalty**: The bank conflict penalty on RDNA3 may not be severe enough to justify the swizzle computation overhead. The padding approach (stride 24 vs 16) effectively breaks bank alignment with minimal overhead.
+
+4. **Fragment Loading Overhead**: Even with optimized vectorized loads, the swizzle requires conditional logic:
+   ```cpp
+   // Swizzled: Conditional offset based on row parity
+   const int grp0_off = (row & 1) ? 8 : 0;
+   const int grp1_off = (row & 1) ? 0 : 8;
+   
+   // Padded: Direct vectorized load
+   const half8 v0 = *reinterpret_cast<const half8*>(row_ptr);
+   const half8 v1 = *reinterpret_cast<const half8*>(row_ptr + 8);
+   ```
+
+### Correctness Fixes Applied
+
+Both `matmul_asmOpt` and `matmul_swizzled` had incorrect fragment loading patterns that were fixed:
+
+**Bug**: Loading COLUMN `frag_col` (iterating rows, fixed column)
+**Fix**: Loading ROW `frag_idx` (fixed row, all K values)
+
+This matches the AMD GPUOpen pattern where each lane loads its own row of A (all 16 K values).
+
+### Recommendations
+
+1. **Use padding for gfx1151**: The 33% LDS savings from XOR swizzle doesn't compensate for the ~15-20% performance loss.
+
+2. **XOR swizzle may be beneficial when**:
+   - LDS is the limiting resource (need to fit more data)
+   - Bank conflict penalty is higher (different architectures)
+   - Swizzle computation can be amortized (larger BLOCK_K)
+
+3. **Future optimization**: Consider vector-granularity swizzling (swizzle on half8 chunks, not individual elements) to reduce computation overhead while maintaining bank conflict avoidance.
+
+### All 12 Kernels Now Pass
+
+After fixing the fragment loading patterns, all 12 kernel variants pass correctness tests:
+
+| Kernel | TFLOPS | Status |
+|--------|--------|--------|
+| matmul_zerocopy | 20.61 | ✅ Best |
+| matmul_adaptive | 20.52 | ✅ |
+| matmul_asmOpt | 20.49 | ✅ Fixed |
+| matmul | 20.46 | ✅ |
+| matmul_native | 19.92 | ✅ |
+| matmul_kunroll | 18.31 | ✅ |
+| matmul_swizzled | 17.90 | ✅ Fixed |
+| matmul_noPrefetch | 17.60 | ✅ |
+| matmul_xor_optimized | 17.26 | ✅ |
+| matmul_quad | 17.01 | ✅ |
+| matmul_hilbert | 13.33 | ✅ |
+| matmul_highOcc | 10.28 | ✅ |
+| matmul_coop | ~20.0 | ✅ New |
+
+---
+
+## Optimization Attempts Summary (December 2025)
+
+This section documents the results of implementing optimizations from the development notes task list.
+
+### Attempted Optimizations
+
+| Optimization | Status | Performance | Notes |
+|-------------|--------|-------------|-------|
+| **Vectorized C Writes** | ❌ Failed | 0.72x slower | Extra 32KB LDS + sync overhead |
+| **Shared Memory Write Buffer** | ❌ Failed | Broken | Union LDS caused correctness issues |
+| **Cooperative Loading** | ✅ Implemented | 1.01-1.06x | Marginal, inconsistent gains |
+| **Register Prefetching (k+2)** | ✅ Already done | N/A | k+1 reg + k+2 L2 prefetch exists |
+| **BLOCK_K=32 (K-unroll)** | ❌ Slower | 0.89-0.97x | LDS/register pressure hurt occupancy |
+| **Code Organization** | ✅ Already done | N/A | Headers already extracted |
+
+### Detailed Analysis
+
+#### 1. Vectorized C Writes (FAILED)
+
+**Approach**: Write C fragments to LDS first, then use all threads for coalesced float4 writes to global memory.
+
+**Results**:
+- 14.43 TFLOPS vs 20.09 TFLOPS standard (0.72x)
+- Extra 32KB LDS for C buffer reduced occupancy
+- Additional `__syncthreads()` added latency
+- The standard kernel's scalar C writes are already efficient
+
+**Conclusion**: The overhead of staging through LDS outweighs any coalescing benefits.
+
+#### 2. Cooperative Loading (MARGINAL)
+
+**Approach**: Split 256 threads into two halves - 128 load A, 128 load B simultaneously.
+
+**Results by matrix size**:
+| Size | Coop | Standard | Ratio |
+|------|------|----------|-------|
+| 2048×2048×512 | 21.38 TF | 20.19 TF | **1.06x** |
+| 4096×4096×512 | 21.09 TF | 20.70 TF | 1.02x |
+| 4096×4096×1024 | 21.45 TF | 21.09 TF | 1.02x |
+| 4096×4096×2048 | 19.84 TF | 20.48 TF | **0.97x** |
+| 8192×8192×2048 | 23.17 TF | 22.61 TF | 1.02x |
+
+**Conclusion**: Helps slightly at small K (1.06x), but hurts at large K (0.97x). Not worth incorporating into the main kernel due to inconsistent gains.
+
+#### 3. BLOCK_K=32 / K-Unroll (SLOWER)
+
+**Approach**: Process 2 WMMA K-tiles (32 elements) per sync to reduce `__syncthreads` overhead.
+
+**Results**:
+| Size | K-Unroll | Standard | Ratio |
+|------|----------|----------|-------|
+| 2048×2048×512 | 20.95 TF | 20.84 TF | 1.01x |
+| 4096×4096×512 | 18.69 TF | 20.66 TF | **0.90x** |
+| 4096×4096×1024 | 18.99 TF | 21.33 TF | **0.89x** |
+| 4096×4096×2048 | 18.78 TF | 19.44 TF | 0.97x |
+
+**Conclusion**: Increased LDS stride (40 vs 24) and register pressure hurt occupancy more than sync savings help.
+
+### Why the Standard Kernel is Hard to Beat
+
+The current standard kernel (`matmul`) is already well-optimized:
+
+1. **Double-buffered LDS** with interleaved prefetch (k+1 to registers)
+2. **Software prefetch** for k+2 tiles to L2 cache
+3. **Vectorized half8 loads** from global memory
+4. **LDS padding** (stride 24) for bank conflict reduction
+5. **2×2 register blocking** per warp (4 WMMA tiles)
+6. **Interleaved MMA + prefetch** for latency hiding
+
+### Gap to rocBLAS
+
+| Implementation | TFLOPS | % of Peak |
+|---------------|--------|-----------|
+| **Our best kernel** | 20-21 | 34% |
+| **PyTorch/rocBLAS** | 34-37 | 58% |
+| **Peak (gfx1151)** | 59.4 | 100% |
+
+The ~43% gap to rocBLAS is likely due to:
+- **Split-K parallelism**: rocBLAS can split K across multiple CTAs
+- **Persistent kernels**: Avoid kernel launch overhead
+- **Assembly-level tuning**: Hand-optimized instruction scheduling
+- **Larger tile sizes**: May use 256×128 or larger with careful occupancy tuning
+
+### Recommendations for Future Work
+
+1. **Split-K implementation**: For large K, split across CTAs and reduce
+2. **Persistent kernel**: Single kernel launch, tiles fetched from work queue
+3. **Assembly optimization**: Use `s_setprio` and manual instruction scheduling
+4. **Profile-guided tuning**: Use rocprof to identify actual bottlenecks
