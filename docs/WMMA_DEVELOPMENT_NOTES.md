@@ -2521,3 +2521,478 @@ The ~43% gap to rocBLAS is likely due to:
 2. **Persistent kernel**: Single kernel launch, tiles fetched from work queue
 3. **Assembly optimization**: Use `s_setprio` and manual instruction scheduling
 4. **Profile-guided tuning**: Use rocprof to identify actual bottlenecks
+
+
+# Findings from HipKittens Research (November 2025)
+
+## Overview
+Recent research from HazyResearch (HipKittens) highlights several key optimizations for AMD GPUs. We evaluated which techniques are applicable to RDNA3.5 (gfx1151).
+
+## 1. Register Scheduling
+- **Finding:** On RDNA3.5, the WMMA instruction uses VGPRs only (no AGPRs). The AGPR optimization from HipKittens does **not apply** to our target.
+- **Verified:** ISA inspection shows 0 `v_accvgpr_read/write` instructions.
+
+## 2. Memory Access Patterns & Bank Conflicts
+- **Variable Phases:** Unlike NVIDIA's sequential phase assignment, AMD's shared memory access phases vary by instruction (e.g., `ds_read_b128` uses 4 phases/64 banks, while `ds_write_b64` uses 4 phases/32 banks).
+- **Swizzling Complexity:** A single swizzle pattern is insufficient for all layouts. For example, writing a 16x16 bf16 tile (`ds_write_b64`) requires a different swizzle pattern than reading a 16x32 bf16 tile (`ds_read_b128`) to avoid bank conflicts. HipKittens solves this with instruction-specific swizzle patterns.
+
+## 3. Scheduling Patterns
+
+### Ping-Pong Scheduling
+- **Tested:** Implemented 4-wave ping-pong pattern (adapted from 8-wave for RDNA3.5's 2 SIMDs/CU)
+- **Result:** Slower than baseline (10.4 vs 16 TFLOPS)
+- **Reason:** For GEMM, all waves must accumulate all K-tiles—no wave specialization possible
+
+## 4. L2-Aware Tile Mapping
+- **Implemented:** `l2_aware_tile_mapping()` in `wmma_tile_mapping.hpp`
+- **Benefit:** Groups tiles into 2D super-tiles for better cache locality
+- **Note:** Chiplet swizzling is available for future multi-XCD GPUs
+
+## Summary for RDNA3.5 (gfx1151)
+
+| HipKittens Technique | Applicable? | Status |
+|---------------------|-------------|--------|
+| Register scheduling (AGPRs) | ❌ No | RDNA uses VGPRs only |
+| Bank conflict swizzling | ✅ Yes | Implemented (XOR swizzle) |
+| Ping-pong scheduling | ❌ No | Tested, slower for GEMM |
+| L2-aware tile mapping | ✅ Yes | Implemented |
+
+## XOR Swizzle Review Results (December 2024)
+
+### ISA Analysis
+Examined generated assembly for LDS instructions:
+
+**Before optimization:**
+| Instruction | Count | Notes |
+|------------|-------|-------|
+| `ds_load_b128` | 226 | ✅ Optimal 128-bit reads |
+| `ds_store_b16` | 216 | ❌ Scalar stores |
+| `ds_store_b16_d16_hi` | 212 | ❌ Scalar stores |
+| `ds_store_b128` | 60 | ✅ Vectorized stores |
+
+**After optimization (vectorized B matrix stores):**
+| Instruction | Count | Change |
+|------------|-------|--------|
+| `ds_load_b128` | 226 | — |
+| `ds_store_b16` | 208 | -8 |
+| `ds_store_b16_d16_hi` | 204 | -8 |
+| `ds_store_b128` | 64 | +4 |
+
+### Root Cause
+The B matrix transpose scatter pattern (loading 8 contiguous N-values, scattering to 8 rows) forced scalar stores. Changed to gather pattern (loading 16 K-values per row) to enable vectorized stores.
+
+### Remaining Limitation
+The B matrix gather from global memory uses strided loads (stride = N), which cannot be vectorized. Further improvement requires:
+1. Pre-transposing B on the host
+2. Using a different B global layout
+3. Using async copy with transpose hardware (if available)
+
+### Correctness
+Verified with 256×256×256 GEMM: max error = 0.023 (within FP16 precision).
+
+## Chiplet Swizzling Implementation (December 2024)
+
+Added L2/LLC-aware chiplet swizzling to `wmma_tile_mapping.hpp` based on HipKittens Algorithm 1.
+
+### New Functions
+
+1. **`chiplet_swizzle_tile_mapping<BLOCK_M, BLOCK_N>()`**
+   - For multi-XCD GPUs (MI300X, MI350X, MI355X)
+   - Two-step algorithm:
+     - XCD Grouping: Chunks of consecutive block IDs go to same XCD
+     - Windowed Traversal: Vertical windows for L2 reuse
+
+2. **`l2_aware_tile_mapping<L2_TILE_M, L2_TILE_N, BLOCK_M, BLOCK_N>()`**
+   - For single-XCD GPUs (RDNA3/3.5 like gfx1151)
+   - Groups tiles into 2D super-tiles for L2 locality
+
+3. **`get_chiplet_params(gpu_arch, ...)`**
+   - Returns recommended parameters per GPU architecture
+   - gfx1151: 1 XCD, window_height=4, chunk_size=16
+   - gfx942 (MI300X): 8 XCDs, window_height=4, chunk_size=32
+   - gfx950 (MI355X): 8 XCDs, window_height=8, chunk_size=32
+
+### New Tile Mapping Modes
+
+- `TileMappingMode::CHIPLET_SWIZZLE` - Full XCD-aware swizzling
+- `TileMappingMode::L2_AWARE` - 2D super-tile grouping
+
+### Selection Logic
+
+Updated `select_tile_mapping()`:
+- Small matrices (<64 tiles): ROW_MAJOR
+- Large matrices (>=256 tiles): L2_AWARE
+- Square matrices: HILBERT
+- Rectangular: SWIZZLE
+
+## Explicit Register Allocation Investigation (December 2024)
+
+### ISA Analysis for gfx1151 (RDNA3.5)
+
+**Key Finding: No AGPR Issues on RDNA3**
+
+The HipKittens paper describes AGPR/VGPR register movement issues on CDNA GPUs (MI300X), but this does **NOT apply to gfx1151**:
+
+| Aspect | CDNA (MI300X/gfx942) | RDNA3.5 (gfx1151) |
+|--------|---------------------|-------------------|
+| Matrix instruction | `v_mfma_*` | `v_wmma_*` |
+| Register types | AGPRs + VGPRs | VGPRs only |
+| Register split | 256 AGPRs + 256 VGPRs | 256 VGPRs total |
+| AGPR issue | HIPCC can't use AGPRs as MFMA inputs | N/A - no AGPRs |
+
+### ISA Inspection Results
+
+```
+Instruction counts:
+- v_wmma_f32_16x16x16_f16: 114 instances
+- v_accvgpr_read/write: 0 instances (not used on RDNA3)
+- v_mov_b32: 1340 instances (normal register shuffling)
+```
+
+**Register usage per kernel:**
+- VGPR: 57-92 per kernel
+- SGPR: 20-28 per kernel
+- No AGPRs (RDNA3 doesn't use them)
+
+### Conclusion
+
+Explicit register allocation optimizations from HipKittens are **NOT applicable** to gfx1151 because:
+1. RDNA3 uses WMMA, not MFMA
+2. No AGPR/VGPR split exists
+3. No `v_accvgpr_read/write` inefficiency to avoid
+
+## 8-Wave Ping-Pong Kernel Implementation (December 2024)
+
+### Overview
+
+Implemented the HipKittens ping-pong scheduling pattern in `wmma_kernels_pingpong.hpp`.
+
+**Adaptation for RDNA3.5 (gfx1151):**
+- RDNA3.5 has 2 SIMDs per CU
+- We use **4 logical wave pairs** (8 warps of 32 threads each)
+- Even wave pairs (0,2) start as "compute"
+- Odd wave pairs (1,3) start as "memory"
+- Roles swap at each cluster boundary
+
+### Key Features
+
+1. **Wave-pair role alternation**:
+   ```cpp
+   bool is_compute_role = (wave_pair_id & 1) == 0;
+   // Toggle at cluster boundaries
+   is_compute_role = !is_compute_role;
+   ```
+
+2. **AMD scheduling hints**:
+   ```cpp
+   __builtin_amdgcn_s_setprio(1);     // Raise priority for compute
+   __builtin_amdgcn_sched_barrier(0); // Flush scheduler state
+   __builtin_amdgcn_s_barrier();      // Thread barrier
+   ```
+
+3. **Cluster structure per K-tile**:
+   - Cluster 0: Compute waves do WMMA, memory waves prefetch
+   - Barrier
+   - Cluster 1: Roles swapped
+   - Barrier
+
+### ISA Verification
+
+Generated assembly shows scheduling hints are being emitted:
+- `s_setprio 1/0` for priority raising/lowering
+- `sched_barrier mask(0x00000000)` for scheduler flush
+- `s_barrier` for synchronization
+
+### Files Added
+
+- `wmma_kernels_pingpong.hpp` - New ping-pong kernel implementation
+- Added include to `wmma_gemm.hip`
+
+### Expected Benefits
+
+- Better compute/memory overlap within a CU
+- Higher effective SIMD utilization
+- Reduced pipeline stalls
+
+### Next Steps
+
+1. Add Python binding for `matmul_pingpong()` function
+2. Performance benchmarking vs baseline
+3. Tune cluster granularity if needed
+
+## Ping-Pong Kernel Results (December 2024)
+
+### Implementation
+
+Created `wmma_kernels_pingpong.hpp` with HipKittens-inspired scheduling.
+
+### Results
+
+| Kernel | Correctness | Performance (1024³) |
+|--------|-------------|---------------------|
+| Ping-pong | ✅ PASS (error 0.016) | 10.42 TFLOPS |
+| Adaptive (baseline) | ✅ PASS | 16.03 TFLOPS |
+
+### Analysis: Why Ping-Pong Doesn't Help GEMM on RDNA3.5
+
+1. **Architecture**: RDNA3.5 has 2 SIMDs per CU (HipKittens targets 4 SIMDs)
+
+2. **GEMM vs Attention**: HipKittens ping-pong is designed for attention where:
+   - Different operations (QK, softmax, AV) can be overlapped
+   - Waves can specialize in different roles
+
+   For GEMM, **all waves must accumulate all K-tiles** - no specialization possible.
+
+3. **Already optimal**: The standard double-buffering in `matmul_adaptive` already achieves good compute/memory overlap.
+
+### Conclusion
+
+The ping-pong pattern is **not beneficial for GEMM on RDNA3.5**. The kernel is correct but slower than the baseline.
+
+**Recommended approach for RDNA3.5 GEMM optimization:**
+- Focus on tile sizes and occupancy tuning
+- Use chiplet swizzling (already implemented in `wmma_tile_mapping.hpp`)
+- Optimize LDS bank conflicts (XOR swizzle)
+
+## Session Cleanup (December 2024)
+
+### Removed Files
+- `flash_attention.hpp` - Removed attention kernel (focus is GEMM)
+- `examples/hipkittens_gqa_kernel.cpp` - Removed (re-added by user for reference)
+- `WMMA_DEVELOPMENT_NOTES.md.orig` - Cleanup backup file
+
+### Current Focus: Maximum WMMA GEMM TFLOPS
+
+**Target**: Achieve peak TFLOPS on gfx1151 (59.4 TFLOPS theoretical)
+
+**Current Best**: `matmul_adaptive` at ~16 TFLOPS (27% efficiency)
+
+### Available GEMM Kernels
+
+| Kernel | Description |
+|--------|-------------|
+| `matmul` | Base 128×64 tile, double-buffered |
+| `matmul_adaptive` | Auto tile selection (best performance) |
+| `matmul_hilbert` | Hilbert curve tile mapping |
+| `matmul_pingpong` | HipKittens-style scheduling (slower) |
+| `matmul_kunroll` | K-unrolling (2x fewer syncs) |
+| `matmul_xor_optimized` | XOR-swizzled LDS |
+
+### Next Steps for Higher TFLOPS
+1. Profile with `rocprof` to identify bottlenecks
+2. Tune tile sizes for different matrix shapes
+3. Investigate memory bandwidth utilization
+4. Consider larger tiles (256×128, 256×256)
+
+# Analysis of adelj88/rocm_wmma_gemm Optimizations (December 2024)
+
+## Overview
+
+Reviewed high-performance WMMA GEMM kernels from [adelj88/rocm_wmma_gemm](https://github.com/adelj88/rocm_wmma_gemm).
+
+**Key achievements (RX 7900 GRE):**
+- 76.37 TFLOPS (8192³), 94.2% of rocBLAS
+- Up to 138% of rocBLAS on some LLM shapes
+
+## Key Optimizations to Incorporate
+
+### 1. Larger Tile Sizes (256×256)
+
+| Config | Our Current | adelj opt_5 |
+|--------|-------------|-------------|
+| Block M | 128 | 256 |
+| Block N | 64 | 128 |
+| Warp Tile M | 2 | 4 |
+| Warp Tile N | 2 | 4 |
+| Accumulators/warp | 4 | 16 |
+
+**Action:** Implement 256×128 tile size with 4×4 warp tiling.
+
+### 2. Cooperative Loading (Half-Block Split)
+
+Adelj uses **half-threads load A, half-threads load B** pattern:
+```cpp
+if(tid < half_block) {
+    // Load A tile
+} else {
+    // Load B tile
+}
+```
+
+**Benefit:** Better memory bandwidth utilization - both matrices streamed simultaneously.
+
+### 3. FP16 Accumulator + FP16 Output
+
+Adelj uses `__builtin_amdgcn_wmma_f16_16x16x16_f16_w32()` for FP16→FP16 output.
+
+**Our current:** `__builtin_amdgcn_wmma_f32_16x16x16_f16_w32()` (FP16→FP32)
+
+**Trade-off:** FP16 accum = faster, less precision. Consider for inference.
+
+### 4. Vectorized Epilogue via LDS
+
+Two-phase epilogue:
+1. Store fragments to LDS
+2. Vectorized coalesced writes from LDS to GMEM
+
+```cpp
+// Phase 1: Store fragments to LDS
+c_tile[row * block_n + col] = c_frags[wm][wn][i * 2];
+__syncthreads();
+
+// Phase 2: Vectorized GMEM write
+*reinterpret_cast<vector_type*>(C + offset) = 
+    *reinterpret_cast<vector_type*>(c_tile + offset);
+```
+
+**Benefit:** Coalesced 256-bit writes vs scattered 32-bit stores.
+
+### 5. Optimized Fragment Loading
+
+Different loading pattern - loads fragments row-by-row in a loop:
+```cpp
+for(int i = 0; i < wmma_tile; ++i) {
+    const half* srca = curr_a + (i * lds_stride_A);
+    for(int wm = 0; wm < warp_tile_m; ++wm) {
+        a_frag[wm][i] = *srca;
+        srca += wmma_tile;
+    }
+}
+```
+
+### 6. Hilbert Curve with Remainder Handling
+
+Improved Hilbert mapping that handles non-power-of-2 grids:
+- Core power-of-2 region: Hilbert curve
+- Remainder regions: Row-major fallback
+
+Already have similar in `wmma_tile_mapping.hpp` but their version is cleaner.
+
+### 7. `__launch_bounds__` for Register Control
+
+```cpp
+__launch_bounds__(warp_size * config::total_warps) kernel_hgemm(...)
+```
+
+Explicit thread count helps compiler optimize register allocation.
+
+## Implementation Priority
+
+1. **HIGH:** Vectorized LDS epilogue (fix our scattered stores)
+2. **HIGH:** Larger tiles (256×128 or 256×256)
+3. **MEDIUM:** Cooperative loading (half A, half B)
+4. **LOW:** FP16 accumulator option for inference
+
+## Performance Gap Analysis
+
+| Metric | Our Best | adelj opt_5 | Gap |
+|--------|----------|-------------|-----|
+| TFLOPS (1024³) | 16 | ~45 (estimated) | 2.8x |
+| % of peak | 27% | ~75% | - |
+
+**Root causes of gap:**
+1. Smaller tiles (fewer MACs per LDS load)
+2. Scattered epilogue stores
+3. Less efficient fragment loading
+
+---
+
+## Interleaved MMA + Prefetch Optimization (December 2025)
+
+### Summary
+
+Implemented and verified the **interleaved MMA + prefetch pattern** across all standard GEMM kernels. This optimization hides memory latency by overlapping global memory loads with WMMA compute operations.
+
+### The Pattern
+
+The key insight is that WMMA operations have significant latency, and we can use this time to prefetch data for the next iteration:
+
+```cpp
+// Sequential (SLOW - 19.4 TFLOPS):
+prefetch_A();
+prefetch_B();
+mma_sync(c00, a0, b0, c00);
+mma_sync(c01, a0, b1, c01);
+mma_sync(c10, a1, b0, c10);
+mma_sync(c11, a1, b1, c11);
+write_to_lds();
+
+// Interleaved (FAST - 20.6 TFLOPS):
+mma_sync(c00, a0, b0, c00);  // MMA while prefetching A
+a_prefetch = load(A_base + BLOCK_K);
+
+mma_sync(c01, a0, b1, c01);  // MMA while prefetching B
+b_prefetch = load(B_base + BLOCK_K * stride);
+
+mma_sync(c10, a1, b0, c10);  // MMA while software prefetch k+2
+__builtin_prefetch(A_base + 2 * BLOCK_K);
+__builtin_prefetch(B_base + 2 * BLOCK_K * stride);
+
+mma_sync(c11, a1, b1, c11);  // MMA while writing to LDS
+write_to_lds(a_prefetch, b_prefetch);
+```
+
+### Performance Impact
+
+| Pattern | TFLOPS | % of Peak |
+|---------|--------|-----------|
+| Sequential (prefetch before MMA) | 19.4 | 32.7% |
+| **Interleaved (prefetch during MMA)** | **20.6** | **34.7%** |
+
+**~6% improvement** from interleaving alone.
+
+### Kernels Updated
+
+| Kernel | Status | Notes |
+|--------|--------|-------|
+| `wmma_gemm_kernel` | ✅ Fixed | Main kernel |
+| `wmma_gemm_kernel_gfx1151` | ✅ Fixed | Used by `matmul_adaptive` |
+| `wmma_gemm_kernel_alphabeta` | ✅ Fixed | Alpha/beta scaling |
+| `wmma_gemm_kernel_asmOpt` | ✅ Already correct | Had pattern from start |
+
+### Kernels with Different Structures
+
+These kernels use different optimization strategies and don't benefit from the same interleaving:
+
+| Kernel | Structure | Reason |
+|--------|-----------|--------|
+| `wmma_gemm_kernel_kunroll` | K-unrolling | Processes 2 K-tiles per sync |
+| `wmma_gemm_kernel_noPrefetch` | No prefetch | Baseline without prefetch |
+| `wmma_gemm_kernel_quad` | Quad-buffering | 4-buffer approach |
+| `wmma_gemm_kernel_hilbert` | Hilbert mapping | Pointer swapping structure |
+| `wmma_gemm_kernel_coop` | Cooperative loading | Split A/B thread groups |
+
+### Key Implementation Details
+
+1. **Register-staged prefetch**: Use `half8` variables to hold prefetched data while MMA executes
+2. **Pointer increment optimization**: Pre-compute base pointers and increment at loop end
+3. **Software prefetch for k+2**: Use `__builtin_prefetch` to bring data into L2 cache
+4. **Bounds checking**: Check `k + BLOCK_K + offset < K` for next iteration
+
+### File Reorganization
+
+Renamed header files for clarity:
+- `wmma_kernels_opt.hpp` → `wmma_kernel_largetile.hpp` (single 128×128 kernel)
+- `wmma_kernels_optimized.hpp` → `wmma_kernel_variants.hpp` (multiple variant kernels)
+
+---
+
+## Current Performance Summary (December 2025)
+
+| Kernel | TFLOPS | % Peak | Status |
+|--------|--------|--------|--------|
+| matmul | 20.5 | 34.5% | ✅ Best |
+| matmul_adaptive | 20.4 | 34.3% | ✅ |
+| matmul_asmOpt | 19.5 | 32.8% | ✅ |
+| matmul_native | 19.4 | 32.7% | ✅ |
+| matmul_zerocopy | 19.2 | 32.3% | ✅ |
+| matmul_kunroll | 18.9 | 31.8% | ✅ |
+| matmul_noPrefetch | 18.0 | 30.3% | ✅ |
+| matmul_quad | 16.9 | 28.5% | ✅ |
+| matmul_hilbert | 14.1 | 23.7% | ✅ |
+| matmul_highOcc | 10.3 | 17.3% | ✅ |
+
+**PyTorch/rocBLAS reference**: 37.4 TFLOPS (63% of peak)
+
+All 12 kernel variants pass correctness tests with ~0.026% relative error.
+

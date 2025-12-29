@@ -10,8 +10,8 @@
 // - Assembly-optimized: Explicit scheduling hints
 // ============================================================================
 
-#ifndef WMMA_KERNELS_OPTIMIZED_HPP
-#define WMMA_KERNELS_OPTIMIZED_HPP
+#ifndef WMMA_KERNEL_VARIANTS_HPP
+#define WMMA_KERNEL_VARIANTS_HPP
 
 #include "rocwmma_patch/rocwmma_gfx1151.hpp"
 #include "wmma_xor_swizzle.hpp"
@@ -114,16 +114,9 @@ __global__ void wmma_gemm_kernel_kunroll(
                     *reinterpret_cast<const half8*>(A_ptr + a_col_global);
             }
             
-            // Load B: transpose from (K,N) row-major to (N,K) col-major in LDS
-            const int b_k_global = k_global + b_k_in_tile;  // Global K row
-            const int b_k_local = k_local + b_k_in_tile;  // LDS K column
-            if (b_valid && b_k_global < K) {
-                half8 b_vec = *reinterpret_cast<const half8*>(B_ptr + b_k_global * N);
-                #pragma unroll
-                for (int i = 0; i < 8; i++) {
-                    B_lds[buf][b_n + i][b_k_local] = reinterpret_cast<__half*>(&b_vec)[i];
-                }
-            }
+            // B: vectorized transpose via shuffle for this K-tile
+            // Note: B_STRIDE here is SUPER_K + LDS_PAD = 40, and we write at offset k_local
+            load_B_tile_vec_64x16(&B_lds[buf][0][k_local], B, N, K, block_n, k_global, tid, B_STRIDE);
         }
     };
     
@@ -287,14 +280,8 @@ __global__ void wmma_gemm_kernel_quad(
                     *reinterpret_cast<const half8*>(A + (block_m + a_row) * K + k + a_col);
             }
             
-            // Load B (transposed)
-            if (b_valid && k + b_k < K) {
-                half8 b_vec = *reinterpret_cast<const half8*>(B + (k + b_k) * N + block_n + b_n);
-                #pragma unroll
-                for (int i = 0; i < 8; i++) {
-                    B_lds[buf][b_n + i][b_k] = reinterpret_cast<__half*>(&b_vec)[i];
-                }
-            }
+            // B: vectorized transpose via shuffle
+            load_B_tile_vec_64x16(&B_lds[buf][0][0], B, N, K, block_n, k, tid, B_STRIDE);
         }
         
         __syncthreads();
@@ -573,14 +560,8 @@ __global__ void wmma_gemm_kernel_noPrefetch(
                 *reinterpret_cast<const half8*>(A + (block_m + a_row) * K + k + a_col);
         }
         
-        // Load B transposed (no prefetch register)
-        if (b_valid && k + b_k < K) {
-            half8 b_vec = *reinterpret_cast<const half8*>(B + (k + b_k) * N + block_n + b_n);
-            #pragma unroll
-            for (int i = 0; i < 8; i++) {
-                B_lds[b_n + i][b_k] = reinterpret_cast<__half*>(&b_vec)[i];
-            }
-        }
+        // B: vectorized transpose via shuffle
+        load_B_tile_vec_64x16(&B_lds[0][0], B, N, K, block_n, k, tid, B_STRIDE);
         
         __syncthreads();
         
@@ -691,14 +672,8 @@ __global__ void wmma_gemm_kernel_asmOpt(
     const int a_col = (tid % A_VECS_PER_ROW) * 8;
     const bool a_valid = (tid < (BLOCK_M * A_VECS_PER_ROW)) && (block_m + a_row < M);
     
-    constexpr int B_VECS_PER_K = BLOCK_N / 8;
-    const int b_k = tid / B_VECS_PER_K;
-    const int b_n = (tid % B_VECS_PER_K) * 8;
-    const bool b_valid = (tid < (BLOCK_K * B_VECS_PER_K)) && (b_k < BLOCK_K) && (block_n + b_n + 7 < N);
-    
-    // Precompute base pointers
+    // Precompute base pointer for A
     const __half* A_base = A + (block_m + a_row) * K;
-    const __half* B_base = B + block_n + b_n;
     
     // PROLOGUE: First tile load
     if (a_valid && a_col + 8 <= K) {
@@ -706,12 +681,8 @@ __global__ void wmma_gemm_kernel_asmOpt(
             *reinterpret_cast<const half8*>(A_base + a_col);
     }
     
-    if (b_valid && b_k < K) {
-        half8 b_vec = *reinterpret_cast<const half8*>(B_base + b_k * N);
-        #pragma unroll
-        for (int i = 0; i < 8; i++)
-            B_lds[0][b_n + i][b_k] = reinterpret_cast<__half*>(&b_vec)[i];
-    }
+    // B: vectorized transpose via shuffle
+    load_B_tile_vec_64x16(&B_lds[0][0][0], B, N, K, block_n, 0, tid, B_STRIDE);
     
     __syncthreads();
     
@@ -772,24 +743,16 @@ __global__ void wmma_gemm_kernel_asmOpt(
         
         c01 = __builtin_amdgcn_wmma_f32_16x16x16_f16_w32(a0, b1, c01);
         
-        // Prefetch B for next iteration
-        if (has_next && b_valid && next_k + b_k < K)
-            b_prefetch = *reinterpret_cast<const half8*>(B_base + (next_k + b_k) * N);
-        
         // Issue remaining 2 WMMAs
         c10 = __builtin_amdgcn_wmma_f32_16x16x16_f16_w32(a1, b0, c10);
         c11 = __builtin_amdgcn_wmma_f32_16x16x16_f16_w32(a1, b1, c11);
         
-        // Write prefetch to LDS for next iteration
+        // Write prefetch to LDS for next iteration (cooperative vectorized loads)
         if (has_next) {
             if (a_valid && next_k + a_col + 8 <= K)
                 *reinterpret_cast<half8*>(&A_lds[next_buf][a_row][a_col]) = a_prefetch;
             
-            if (b_valid && next_k + b_k < K) {
-        #pragma unroll
-                for (int i = 0; i < 8; i++)
-                    B_lds[next_buf][b_n + i][b_k] = reinterpret_cast<__half*>(&b_prefetch)[i];
-            }
+            load_B_tile_vec_64x16(&B_lds[next_buf][0][0], B, N, K, block_n, next_k, tid, B_STRIDE);
         }
         
         __syncthreads();
@@ -952,14 +915,8 @@ __global__ void wmma_gemm_kernel_hilbert(
             *reinterpret_cast<const half8*>(A + (block_m + a_row) * K + a_col);
     }
     
-    // B: first 128 threads load B transposed
-    if (b_valid && b_k < K) {
-        half8 b_vec = *reinterpret_cast<const half8*>(B + b_k * N + block_n + b_n);
-        #pragma unroll
-        for (int i = 0; i < 8; i++) {
-            B_lds_curr[(b_n + i) * B_STRIDE + b_k] = reinterpret_cast<__half*>(&b_vec)[i];
-        }
-    }
+    // B: vectorized transpose via shuffle
+    load_B_tile_vec_64x16(B_lds_curr, B, N, K, block_n, 0, tid, B_STRIDE);
     
     __syncthreads();
     
@@ -973,13 +930,8 @@ __global__ void wmma_gemm_kernel_hilbert(
                 *reinterpret_cast<const half8*>(A + (block_m + a_row) * K + k + a_col);
         }
         
-        if (b_valid && k + b_k < K) {
-            half8 b_vec = *reinterpret_cast<const half8*>(B + (k + b_k) * N + block_n + b_n);
-            #pragma unroll
-            for (int i = 0; i < 8; i++) {
-                B_lds_next[(b_n + i) * B_STRIDE + b_k] = reinterpret_cast<__half*>(&b_vec)[i];
-            }
-        }
+        // B: vectorized transpose via shuffle
+        load_B_tile_vec_64x16(B_lds_next, B, N, K, block_n, k, tid, B_STRIDE);
         
         // Step 2: Load fragments from CURRENT buffer and compute MMA
         if (warp_active) {
@@ -1197,13 +1149,8 @@ __global__ void wmma_gemm_kernel_coop(
             }
         }
     } else {
-        if (b_valid_flag && b_k < K) {
-            half8 b_vec = *reinterpret_cast<const half8*>(B_base + b_k * N + b_n);
-            #pragma unroll
-            for (int i = 0; i < 8; i++) {
-                B_lds[0][b_n + i][b_k] = reinterpret_cast<__half*>(&b_vec)[i];
-            }
-        }
+        // B: vectorized transpose via shuffle (use coop_tid which is 0-127 for B loaders)
+        load_B_tile_vec_64x16(&B_lds[0][0][0], B, N, K, block_n, 0, coop_tid, B_STRIDE);
     }
     
     __syncthreads();
@@ -1269,12 +1216,8 @@ __global__ void wmma_gemm_kernel_coop(
                     }
                 }
             } else {
-                if (b_valid_flag) {
-                    #pragma unroll
-                    for (int i = 0; i < 8; i++) {
-                        B_lds[next_buf][b_n + i][b_k] = reinterpret_cast<__half*>(&b_prefetch)[i];
-                    }
-                }
+                // B: vectorized transpose via shuffle
+                load_B_tile_vec_64x16(&B_lds[next_buf][0][0], B, N, K, block_n, k + BLOCK_K, coop_tid, B_STRIDE);
             }
         }
         
@@ -1310,6 +1253,6 @@ __global__ void wmma_gemm_kernel_coop(
 template __global__ void wmma_gemm_kernel_coop<8, 4, 2>(
     const __half*, const __half*, float*, int, int, int);
 
-#endif // WMMA_KERNELS_OPTIMIZED_HPP
+#endif // WMMA_KERNEL_VARIANTS_HPP
 
 

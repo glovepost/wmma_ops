@@ -617,7 +617,12 @@ def diagnose_bottleneck(name, tflops, pct_peak, info, peak_tflops):
     if pct_peak < MODERATE_UTILIZATION:
         return "⚠️ Memory: Likely LDS bank conflicts"
     
-    return "⚠️ Unknown: Needs profiling"
+    # Kernels at 25-35% peak with standard config are likely memory/latency bound
+    # After vectorized B transpose fix, the remaining bottleneck is typically:
+    # - Memory latency hiding (need more compute per memory op)
+    # - LDS bandwidth (multiple warps competing for LDS access)
+    # - Global memory bandwidth for large matrices
+    return "⚠️ Memory/Latency: Needs better latency hiding or prefetch"
 
 def main():
     """Run all tests"""

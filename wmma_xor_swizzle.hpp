@@ -435,12 +435,18 @@ __global__ void wmma_gemm_kernel_xor_swizzle(
     const int a_col = (a_vec_idx % (BLOCK_K / 8)) * 8;
     const bool a_valid = (a_vec_idx < A_VECS) && (block_m + a_row < M);
     
-    // Load indices for B (transpose)
-    constexpr int B_VECS = BLOCK_K * BLOCK_N / 8;
-    const int b_vec_idx = tid;
-    const int b_k = b_vec_idx / (BLOCK_N / 8);
-    const int b_n = (b_vec_idx % (BLOCK_N / 8)) * 8;
-    const bool b_valid = (b_vec_idx < B_VECS) && (b_k < BLOCK_K);
+    // Load indices for B (transpose) - VECTORIZED APPROACH
+    // B is stored in global memory as row-major [K][N]
+    // We want B_lds to be [N][K] (transposed) with BLOCK_K=16 elements per row
+    // 
+    // NEW STRATEGY: Each thread loads one K-row worth of contiguous K values
+    // and stores them vectorially to a specific N-row in B_lds.
+    // This avoids scalar scatter and enables ds_store_b128.
+    //
+    // With BLOCK_K=16 and half8 vectors, each N-row needs 2 half8 stores.
+    // With NWARPS*32 threads and BLOCK_N rows to fill, we assign threads to rows.
+    constexpr int B_ROWS_PER_THREAD = (BLOCK_N + NWARPS * 32 - 1) / (NWARPS * 32);
+    const int b_n_base = tid;  // Each thread handles row tid, tid+numThreads, etc.
     
     // ========================================================================
     // PROLOGUE: Load first tile with XOR swizzle (vectorized stores)
@@ -460,33 +466,47 @@ __global__ void wmma_gemm_kernel_xor_swizzle(
         }
     }
     
-    if (b_valid && block_n + b_n + 7 < N) {
-        half8 data = *reinterpret_cast<const half8*>(B + b_k * N + block_n + b_n);
-        // For B transposed: store row-by-row (each b_n index is a row in B_lds)
-        // We load 8 consecutive N values but they go into different rows
-        // Actually B loading is more complex - each half8 loads 8 consecutive N values
-        // which need to be scattered to 8 different rows
-        #pragma unroll
-        for (int i = 0; i < 8; i++) {
-            int n_idx = b_n + i;
+    // B matrix loading - VECTORIZED
+    // Each thread loads one complete row of B_lds (16 K-elements = 2 half8)
+    // B global layout: [K][N], so B[k][n] = B[k * N + n]
+    // B_lds layout: [N][K], so B_lds[n][k] = B_lds[n * BLOCK_K + swizzled_k]
+    #pragma unroll
+    for (int iter = 0; iter < B_ROWS_PER_THREAD; iter++) {
+        int n_idx = b_n_base + iter * (NWARPS * 32);
+        if (n_idx < BLOCK_N && block_n + n_idx < N) {
+            // Load 16 K-values for this N-row from global memory
+            // B[k][block_n + n_idx] for k = 0..15
+            // These are NOT contiguous in global memory (stride = N)
+            // So we need to load 16 individual values or use a gather pattern
+            
+            // For now, use a simple gather (this generates 16 loads but enables vectorized store)
+            half8 data0, data1;
+            #pragma unroll
+            for (int k = 0; k < 8; k++) {
+                reinterpret_cast<__half*>(&data0)[k] = B[k * N + block_n + n_idx];
+            }
+            #pragma unroll
+            for (int k = 0; k < 8; k++) {
+                reinterpret_cast<__half*>(&data1)[k] = B[(k + 8) * N + block_n + n_idx];
+            }
+            
+            // Store vectorially with XOR swizzle
             int swap_b = (n_idx & 1) << 3;
-            int store_idx = n_idx * BLOCK_K;
-            // b_k is the k-position (0..15 typically)
-            int k_group = b_k >> 3;  // 0 or 1
-            int k_local = b_k & 7;
-            int phys_k = (k_group == 0) ? (swap_b + k_local) : ((8 ^ swap_b) + k_local);
-            B_lds[0][store_idx + phys_k] = reinterpret_cast<__half*>(&data)[i];
+            int store_base = n_idx * BLOCK_K;
+            *reinterpret_cast<half8*>(&B_lds[0][store_base + swap_b]) = data0;
+            *reinterpret_cast<half8*>(&B_lds[0][store_base + (8 ^ swap_b)]) = data1;
         }
     }
+
     
     __syncthreads();
     
     int curr_buf = 0;
     const int frag_col = lane_id % 16;
     
-    // Pointers for prefetch
+    // Pointer for A prefetch
     const __half* A_ptr = A + (block_m + a_row) * K;
-    const __half* B_base = B + block_n + b_n;
+    // Note: B is accessed directly with gather pattern in the main loop
     
     // ========================================================================
     // MAIN LOOP
@@ -586,17 +606,25 @@ __global__ void wmma_gemm_kernel_xor_swizzle(
                 }
             }
             
-            if (b_valid && block_n + b_n + 7 < N) {
-                half8 data = *reinterpret_cast<const half8*>(B_base + (next_k + b_k) * N);
-                #pragma unroll
-                for (int i = 0; i < 8; i++) {
-                    int n_idx = b_n + i;
+            // B prefetch - VECTORIZED (matches prologue pattern)
+            #pragma unroll
+            for (int iter = 0; iter < B_ROWS_PER_THREAD; iter++) {
+                int n_idx = b_n_base + iter * (NWARPS * 32);
+                if (n_idx < BLOCK_N && block_n + n_idx < N) {
+                    half8 data0, data1;
+                    #pragma unroll
+                    for (int kk = 0; kk < 8; kk++) {
+                        reinterpret_cast<__half*>(&data0)[kk] = B[(next_k + kk) * N + block_n + n_idx];
+                    }
+                    #pragma unroll
+                    for (int kk = 0; kk < 8; kk++) {
+                        reinterpret_cast<__half*>(&data1)[kk] = B[(next_k + 8 + kk) * N + block_n + n_idx];
+                    }
+                    
                     int swap_b = (n_idx & 1) << 3;
-                    int store_idx = n_idx * BLOCK_K;
-                    int k_group = b_k >> 3;
-                    int k_local = b_k & 7;
-                    int phys_k = (k_group == 0) ? (swap_b + k_local) : ((8 ^ swap_b) + k_local);
-                    B_lds[next_buf][store_idx + phys_k] = reinterpret_cast<__half*>(&data)[i];
+                    int store_base = n_idx * BLOCK_K;
+                    *reinterpret_cast<half8*>(&B_lds[next_buf][store_base + swap_b]) = data0;
+                    *reinterpret_cast<half8*>(&B_lds[next_buf][store_base + (8 ^ swap_b)]) = data1;
                 }
             }
         }

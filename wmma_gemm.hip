@@ -5,8 +5,9 @@
 #include "wmma_device_helpers.hpp"
 #include "wmma_tile_selection.hpp"
 #include "wmma_tile_mapping.hpp"
-#include "wmma_kernels_optimized.hpp"
-#include "flash_attention.hpp"
+#include "wmma_kernel_variants.hpp"
+#include "wmma_kernels_pingpong.hpp"
+#include "wmma_kernel_largetile.hpp"
 
 using namespace rocwmma;
 
@@ -38,7 +39,7 @@ using namespace rocwmma;
 // Type definitions are in wmma_xor_swizzle.hpp
 // Device helper functions are in wmma_device_helpers.hpp
 // Tile selection logic is in wmma_tile_selection.hpp
-// Optimization variant kernels are in wmma_kernels_optimized.hpp
+// Optimization variant kernels are in wmma_kernel_variants.hpp
 // LDS_PAD is defined in wmma_xor_swizzle.hpp
 
 template<int NWARPS, int WARPS_M_PARAM, int WARPS_N_PARAM>
@@ -531,7 +532,7 @@ __global__ void wmma_gemm_kernel_alphabeta(
         for (int j = 0; j < 2; j++)
             fill_fragment(c_frag[i][j], 0.0f);
     
-    // Load assignments with pointer arithmetic optimization
+    // Load assignments
     constexpr int A_VECS_PER_ROW = BLOCK_K / 8;
     const int a_vec_idx = tid;
     const int a_row = a_vec_idx / A_VECS_PER_ROW;
@@ -544,12 +545,12 @@ __global__ void wmma_gemm_kernel_alphabeta(
     const int b_n = (b_vec_idx % B_VECS_PER_K) * 8;
     const bool b_valid = (b_vec_idx < B_VEC_LOADS) && (b_k < BLOCK_K) && (block_n + b_n + 7 < N);
     
-    // Base pointers for pointer increment pattern
+    // Pre-compute base pointers
     const __half* A_base = A + (block_m + a_row) * K + a_col;
     const __half* B_base = B + b_k * N + block_n + b_n;
     const int B_stride_per_k = N;
     
-    // PROLOGUE: Initial load
+    // PROLOGUE
     if (a_valid && a_col + 8 <= K) {
         *reinterpret_cast<half8*>(&A_lds[0][a_row][a_col]) = 
             *reinterpret_cast<const half8*>(A_base);
@@ -568,7 +569,7 @@ __global__ void wmma_gemm_kernel_alphabeta(
     int curr_buf = 0;
     int k_remaining = K;
     
-    // MAIN LOOP
+    // MAIN LOOP with interleaved MMA + prefetch
     for (int k = 0; k < K; k += BLOCK_K) {
         const int next_buf = 1 - curr_buf;
         const bool has_next = (k_remaining > BLOCK_K);
@@ -671,7 +672,7 @@ template __global__ void wmma_gemm_kernel_alphabeta<4, 2, 2>(const __half*, cons
 template __global__ void wmma_gemm_kernel_alphabeta<16, 8, 2>(const __half*, const __half*, const float*, float*, int, int, int, float, float);
 template __global__ void wmma_gemm_kernel_alphabeta<16, 4, 4>(const __half*, const __half*, const float*, float*, int, int, int, float, float);
 
-// Optimization variant kernels are now in wmma_kernels_optimized.hpp
+// Optimization variant kernels are now in wmma_kernel_variants.hpp
 
 // =============================================================================
 // GFX1151-SPECIFIC OPTIMIZED KERNELS
@@ -751,7 +752,7 @@ __global__ void wmma_gemm_kernel_gfx1151(
         for (int j = 0; j < 2; j++)
             fill_fragment(c_frag[i][j], 0.0f);
     
-    // Load assignments with pointer arithmetic optimization
+    // Load assignments
     constexpr int A_VECS_PER_ROW = BLOCK_K / 8;
     const int a_vec_idx = tid;
     const int a_row = a_vec_idx / A_VECS_PER_ROW;
@@ -764,12 +765,12 @@ __global__ void wmma_gemm_kernel_gfx1151(
     const int b_n = (b_vec_idx % B_VECS_PER_K) * 8;
     const bool b_valid = (b_vec_idx < B_VEC_LOADS) && (b_k < BLOCK_K) && (block_n + b_n + 7 < N);
     
-    // Base pointers for pointer increment pattern
+    // Pre-compute base pointers for pointer increment pattern
     const __half* A_base = A + (block_m + a_row) * K + a_col;
     const __half* B_base = B + b_k * N + block_n + b_n;
     const int B_stride_per_k = N;
     
-    // PROLOGUE: Initial load
+    // PROLOGUE
     if (a_valid && a_col + 8 <= K) {
         *reinterpret_cast<half8*>(&A_lds[0][a_row][a_col]) = 
             *reinterpret_cast<const half8*>(A_base);
@@ -788,7 +789,7 @@ __global__ void wmma_gemm_kernel_gfx1151(
     int curr_buf = 0;
     int k_remaining = K;
     
-    // MAIN LOOP with aggressive unrolling hint
+    // MAIN LOOP with interleaved MMA + prefetch
     #pragma unroll 1
     for (int k = 0; k < K; k += BLOCK_K) {
         const int next_buf = 1 - curr_buf;
@@ -800,7 +801,6 @@ __global__ void wmma_gemm_kernel_gfx1151(
         fragment<matrix_a, WMMA_M, WMMA_N, WMMA_K, __half, row_major> a_frag[2];
         fragment<matrix_b, WMMA_M, WMMA_N, WMMA_K, __half, col_major> b_frag[2];
         
-        // Load fragments from LDS
         if (warp_active) {
             #pragma unroll
             for (int ti = 0; ti < 2; ti++)
@@ -810,21 +810,31 @@ __global__ void wmma_gemm_kernel_gfx1151(
                 load_matrix_sync_lds_b_transposed(b_frag[tj], &B_lds[curr_buf][warp_n_base + tj * WMMA_N][0], B_STRIDE);
         }
         
-        // Interleaved MMA and prefetch for dual-issue
+        // MMA (0,0) + Prefetch A
         if (warp_active) mma_sync(c_frag[0][0], a_frag[0], b_frag[0], c_frag[0][0]);
         
-        if (has_next && a_valid)
+        if (has_next && a_valid && (k + BLOCK_K + a_col + 8 <= K))
             a_prefetch = *reinterpret_cast<const half8*>(A_base + BLOCK_K);
         
+        // MMA (0,1) + Prefetch B
         if (warp_active) mma_sync(c_frag[0][1], a_frag[0], b_frag[1], c_frag[0][1]);
         
-        if (has_next && b_valid)
+        if (has_next && b_valid && (k + BLOCK_K + b_k < K))
             b_prefetch = *reinterpret_cast<const half8*>(B_base + BLOCK_K * B_stride_per_k);
         
+        // MMA (1,0)
         if (warp_active) mma_sync(c_frag[1][0], a_frag[1], b_frag[0], c_frag[1][0]);
+        
+        // Software prefetch for k+2*BLOCK_K
+        if (k_remaining > 2 * BLOCK_K) {
+            __builtin_prefetch(A_base + 2 * BLOCK_K, 0, 3);
+            __builtin_prefetch(B_base + 2 * BLOCK_K * B_stride_per_k, 0, 3);
+        }
+        
+        // MMA (1,1)
         if (warp_active) mma_sync(c_frag[1][1], a_frag[1], b_frag[1], c_frag[1][1]);
         
-        // Write prefetch to next buffer
+        // Write prefetch to LDS
         if (has_next) {
             if (a_valid)
                 *reinterpret_cast<half8*>(&A_lds[next_buf][a_row][a_col]) = a_prefetch;
@@ -948,16 +958,7 @@ __global__ void wmma_gemm_kernel_zerocopy(
     const int a_col = (a_vec_idx % A_VECS_PER_ROW) * 8;
     const bool a_valid = (a_vec_idx < A_VEC_LOADS) && (block_m + a_row < M);
     
-    // B loading: each thread handles 8 elements but scatter-writes
-    constexpr int B_VECS_PER_K = BLOCK_N / 8;
-    const int b_vec_idx = tid;
-    const int b_k = b_vec_idx / B_VECS_PER_K;
-    const int b_n = (b_vec_idx % B_VECS_PER_K) * 8;
-    const bool b_valid = (b_vec_idx < B_VEC_LOADS) && (b_k < BLOCK_K) && (block_n + b_n + 7 < N);
-    
     const __half* A_base = A + (block_m + a_row) * K + a_col;
-    const __half* B_base = B + b_k * N + block_n + b_n;
-    const int B_stride_per_k = N;
     
     // PROLOGUE
     if (a_valid && a_col + 8 <= K) {
@@ -965,15 +966,8 @@ __global__ void wmma_gemm_kernel_zerocopy(
             *reinterpret_cast<const half8*>(A_base);
     }
     
-    // Cooperative B transpose (B is KxN row-major, store as NxK in LDS for col_major access)
-    // FIX: Removed swizzle due to inconsistent read/write pattern causing incorrect results
-    if (b_valid && b_k < K) {
-        half8 b_vec = *reinterpret_cast<const half8*>(B_base);
-        #pragma unroll
-        for (int i = 0; i < 8; i++) {
-            B_lds[0][b_n + i][b_k] = reinterpret_cast<__half*>(&b_vec)[i];
-        }
-    }
+    // B: vectorized transpose via shuffle
+    load_B_tile_vec_64x16(&B_lds[0][0][0], B, N, K, block_n, 0, tid, B_STRIDE);
     
     __syncthreads();
     
@@ -986,15 +980,11 @@ __global__ void wmma_gemm_kernel_zerocopy(
         const int next_buf = 1 - curr_buf;
         const bool has_next = (k_remaining > BLOCK_K);
         
-        half8 a_prefetch = {};
-        half8 b_prefetch = {};
-        
         fragment<matrix_a, WMMA_M, WMMA_N, WMMA_K, __half, row_major> a_frag[2];
         fragment<matrix_b, WMMA_M, WMMA_N, WMMA_K, __half, col_major> b_frag[2];
         
-        // Load fragments - use standard loaders (swizzle removed for correctness)
         if (warp_active) {
-        #pragma unroll
+            #pragma unroll
             for (int ti = 0; ti < 2; ti++)
                 load_matrix_sync_lds(a_frag[ti], &A_lds[curr_buf][warp_m_base + ti * WMMA_M][0], A_STRIDE);
             #pragma unroll
@@ -1002,35 +992,24 @@ __global__ void wmma_gemm_kernel_zerocopy(
                 load_matrix_sync_lds_b_transposed(b_frag[tj], &B_lds[curr_buf][warp_n_base + tj * WMMA_N][0], B_STRIDE);
         }
         
-        // Interleaved MMA and prefetch
-        if (warp_active) mma_sync(c_frag[0][0], a_frag[0], b_frag[0], c_frag[0][0]);
-        
-        if (has_next && a_valid)
-            a_prefetch = *reinterpret_cast<const half8*>(A_base + BLOCK_K);
-        
-        if (warp_active) mma_sync(c_frag[0][1], a_frag[0], b_frag[1], c_frag[0][1]);
-        
-        if (has_next && b_valid)
-            b_prefetch = *reinterpret_cast<const half8*>(B_base + BLOCK_K * B_stride_per_k);
-        
-        if (warp_active) mma_sync(c_frag[1][0], a_frag[1], b_frag[0], c_frag[1][0]);
-        if (warp_active) mma_sync(c_frag[1][1], a_frag[1], b_frag[1], c_frag[1][1]);
-        
-        // Write prefetch to next buffer (swizzle removed for correctness)
+        // Prefetch next K-tile (cooperative vectorized loads)
         if (has_next) {
-            if (a_valid)
-                *reinterpret_cast<half8*>(&A_lds[next_buf][a_row][a_col]) = a_prefetch;
+            if (a_valid && (k + BLOCK_K + a_col + 8 <= K))
+                *reinterpret_cast<half8*>(&A_lds[next_buf][a_row][a_col]) = 
+                    *reinterpret_cast<const half8*>(A_base + BLOCK_K);
             
-            if (b_valid) {
-        #pragma unroll
-                for (int i = 0; i < 8; i++) {
-                    B_lds[next_buf][b_n + i][b_k] = reinterpret_cast<__half*>(&b_prefetch)[i];
-                }
-            }
+            load_B_tile_vec_64x16(&B_lds[next_buf][0][0], B, N, K, block_n, k + BLOCK_K, tid, B_STRIDE);
+        }
+        
+        // Compute 2x2 WMMA tiles
+        if (warp_active) {
+            mma_sync(c_frag[0][0], a_frag[0], b_frag[0], c_frag[0][0]);
+            mma_sync(c_frag[0][1], a_frag[0], b_frag[1], c_frag[0][1]);
+            mma_sync(c_frag[1][0], a_frag[1], b_frag[0], c_frag[1][0]);
+            mma_sync(c_frag[1][1], a_frag[1], b_frag[1], c_frag[1][1]);
         }
         
         A_base += BLOCK_K;
-        B_base += BLOCK_K * B_stride_per_k;
         k_remaining -= BLOCK_K;
         
         __syncthreads();
@@ -1127,12 +1106,7 @@ __global__ void wmma_gemm_kernel_native(
     const int a_col = (tid % 2) * 8;
     const bool a_valid = (a_row < BLOCK_M) && (block_m + a_row < M);
     
-    const int b_k = tid / 8;
-    const int b_n = (tid % 8) * 8;
-    const bool b_valid = (b_k < BLOCK_K) && (block_n + b_n + 7 < N);
-    
     const __half* A_ptr = A + (block_m + a_row) * K + a_col;
-    const __half* B_ptr = B + b_k * N + block_n + b_n;
     
     // PROLOGUE: Load first tile
     if (a_valid && a_col + 8 <= K) {
@@ -1140,13 +1114,8 @@ __global__ void wmma_gemm_kernel_native(
             *reinterpret_cast<const half8*>(A_ptr);
     }
     
-    if (b_valid && b_k < K) {
-        half8 b_vec = *reinterpret_cast<const half8*>(B_ptr);
-        #pragma unroll
-        for (int i = 0; i < 8; i++) {
-            B_lds[0][b_n + i][b_k] = reinterpret_cast<__half*>(&b_vec)[i];
-        }
-    }
+    // B: vectorized transpose via shuffle
+    load_B_tile_vec_64x16(&B_lds[0][0][0], B, N, K, block_n, 0, tid, B_STRIDE);
     
     // Explicit fence before compute
     full_fence();
@@ -1160,13 +1129,7 @@ __global__ void wmma_gemm_kernel_native(
         const int next_buf = 1 - curr_buf;
         const bool has_next = (k + BLOCK_K < K);
         
-        // Issue prefetch for k+2*BLOCK_K (hardware prefetch)
-        if (k + 2*BLOCK_K < K && tid == 0) {
-            hw_prefetch_global(A + (block_m) * K + k + 2*BLOCK_K, 256);
-        }
-        
-        // Load A and B fragments from LDS using the custom fragment loader
-        // Use our existing load_matrix_sync_lds functions which handle lane distribution
+        // Load A and B fragments from LDS
         fragment<matrix_a, WMMA_M, WMMA_N, WMMA_K, __half, row_major> a_frag[2];
         fragment<matrix_b, WMMA_M, WMMA_N, WMMA_K, __half, col_major> b_frag[2];
         
@@ -1175,49 +1138,24 @@ __global__ void wmma_gemm_kernel_native(
         load_matrix_sync_lds_b_transposed(b_frag[0], &B_lds[curr_buf][warp_n_base][0], B_STRIDE);
         load_matrix_sync_lds_b_transposed(b_frag[1], &B_lds[curr_buf][warp_n_base + WMMA_N][0], B_STRIDE);
         
-        // ============ WMMA COMPUTE (4 tiles) with interleaved prefetch ============
+        // Prefetch next K-tile (cooperative vectorized loads)
+        if (has_next) {
+            if (a_valid && (k + BLOCK_K + a_col + 8 <= K))
+                *reinterpret_cast<half8*>(&A_lds[next_buf][a_row][a_col]) = 
+                    *reinterpret_cast<const half8*>(A_ptr + BLOCK_K);
+            
+            load_B_tile_vec_64x16(&B_lds[next_buf][0][0], B, N, K, block_n, k + BLOCK_K, tid, B_STRIDE);
+        }
+        
+        // Compute 2x2 WMMA tiles
         if (warp_active) {
-            // Tile (0,0)
             mma_sync(c_frag[0][0], a_frag[0], b_frag[0], c_frag[0][0]);
-            
-            // Start prefetch loads WHILE compute is running (dual-issue)
-            half8 a_next = {};
-            if (has_next && a_valid && k + BLOCK_K + a_col + 8 <= K) {
-                a_next = *reinterpret_cast<const half8*>(A_ptr + BLOCK_K);
-            }
-            
-            // Tile (0,1)
             mma_sync(c_frag[0][1], a_frag[0], b_frag[1], c_frag[0][1]);
-            
-            half8 b_next = {};
-            if (has_next && b_valid && k + BLOCK_K + b_k < K) {
-                b_next = *reinterpret_cast<const half8*>(B_ptr + BLOCK_K * N);
-            }
-            
-            // Tile (1,0)
             mma_sync(c_frag[1][0], a_frag[1], b_frag[0], c_frag[1][0]);
-            
-            // Tile (1,1)
             mma_sync(c_frag[1][1], a_frag[1], b_frag[1], c_frag[1][1]);
-            
-            // Wait for global loads, then write to LDS
-            vmem_fence();
-            
-            if (has_next) {
-                if (a_valid)
-                    *reinterpret_cast<half8*>(&A_lds[next_buf][a_row][a_col]) = a_next;
-                
-                if (b_valid) {
-        #pragma unroll
-                    for (int i = 0; i < 8; i++) {
-                        B_lds[next_buf][b_n + i][b_k] = reinterpret_cast<__half*>(&b_next)[i];
-                    }
-                }
-            }
         }
         
         A_ptr += BLOCK_K;
-        B_ptr += BLOCK_K * N;
         
         __syncthreads();
         curr_buf = next_buf;
@@ -1319,6 +1257,114 @@ torch::Tensor wmma_matmul_adaptive(torch::Tensor A, torch::Tensor B) {
             break;
         }
     }
+    
+    C10_HIP_KERNEL_LAUNCH_CHECK();
+    return C;
+}
+
+// =============================================================================
+// PING-PONG KERNEL
+// Implements HipKittens-style wave-pair scheduling for compute/memory overlap
+// - 4 wave pairs (8 warps), alternating compute/memory roles
+// - AMD scheduling hints for better instruction interleaving
+// - Requires: K%16==0, N%8==0, M%16==0 for correctness
+// =============================================================================
+torch::Tensor wmma_matmul_pingpong(torch::Tensor A, torch::Tensor B) {
+    TORCH_CHECK(A.is_cuda() && B.is_cuda(), "Inputs must be GPU tensors");
+    TORCH_CHECK(A.device() == B.device(), "Inputs must be on same device");
+    TORCH_CHECK(A.dtype() == torch::kFloat16 && B.dtype() == torch::kFloat16, "Inputs must be float16");
+    TORCH_CHECK(A.dim() == 2 && B.dim() == 2, "Inputs must be 2D");
+    TORCH_CHECK(A.size(1) == B.size(0), "Inner dimensions must match");
+    
+    const int M = A.size(0);
+    const int K = A.size(1);
+    const int N = B.size(1);
+    
+    // Correctness constraints
+    TORCH_CHECK((K % 16) == 0, "K must be a multiple of 16 for WMMA (got K=", K, ")");
+    TORCH_CHECK((N % 8) == 0, "N must be a multiple of 8 for half8 vector loads (got N=", N, ")");
+    TORCH_CHECK((M % 16) == 0, "M must be a multiple of 16 for clean tiles (got M=", M, ")");
+    
+    A = A.contiguous();
+    B = B.contiguous();
+    
+    TORCH_CHECK((reinterpret_cast<uintptr_t>(A.data_ptr()) % 16) == 0, "A must be 16-byte aligned");
+    TORCH_CHECK((reinterpret_cast<uintptr_t>(B.data_ptr()) % 16) == 0, "B must be 16-byte aligned");
+    
+    auto C = torch::empty({M, N}, torch::dtype(torch::kFloat32).device(A.device()));
+    
+    const __half* A_ptr = reinterpret_cast<const __half*>(A.data_ptr<at::Half>());
+    const __half* B_ptr = reinterpret_cast<const __half*>(B.data_ptr<at::Half>());
+    float* C_ptr = C.data_ptr<float>();
+    
+    hipStream_t stream = c10::hip::getCurrentHIPStream(A.device().index()).stream();
+    
+    // 8 warps (4×2), Macro tile: 128×64
+    constexpr int NWARPS = 8;
+    constexpr int WARPS_M = 4;
+    constexpr int WARPS_N = 2;
+    constexpr int MACRO_TILE_M = 128;  // WARPS_M * 32
+    constexpr int MACRO_TILE_N = 64;   // WARPS_N * 32
+    
+    const int grid_m = (M + MACRO_TILE_M - 1) / MACRO_TILE_M;
+    const int grid_n = (N + MACRO_TILE_N - 1) / MACRO_TILE_N;
+    
+    dim3 grid(grid_n, grid_m);
+    dim3 block(NWARPS * 32);  // 256 threads
+    
+    wmma_gemm_kernel_pingpong<NWARPS, WARPS_M, WARPS_N><<<grid, block, 0, stream>>>(
+        A_ptr, B_ptr, C_ptr, M, N, K);
+    
+    C10_HIP_KERNEL_LAUNCH_CHECK();
+    return C;
+}
+
+// =============================================================================
+// OPTIMIZED KERNEL (adelj-style)
+// - 256×128 tiles with 4×4 warp tiling (16 WMMA tiles per warp)
+// - Cooperative loading (half threads load A, half load B)
+// - Vectorized LDS epilogue for coalesced writes
+// - Requires: M%256==0, N%128==0, K%16==0 for best performance
+// =============================================================================
+torch::Tensor wmma_matmul_opt(torch::Tensor A, torch::Tensor B) {
+    TORCH_CHECK(A.is_cuda() && B.is_cuda(), "Inputs must be GPU tensors");
+    TORCH_CHECK(A.device() == B.device(), "Inputs must be on same device");
+    TORCH_CHECK(A.dtype() == torch::kFloat16 && B.dtype() == torch::kFloat16, "Inputs must be float16");
+    TORCH_CHECK(A.dim() == 2 && B.dim() == 2, "Inputs must be 2D");
+    TORCH_CHECK(A.size(1) == B.size(0), "Inner dimensions must match");
+    
+    const int M = A.size(0);
+    const int K = A.size(1);
+    const int N = B.size(1);
+    
+    // Alignment checks for optimal performance
+    TORCH_CHECK((K % 16) == 0, "K must be a multiple of 16 for WMMA (got K=", K, ")");
+    
+    A = A.contiguous();
+    B = B.contiguous();
+    
+    TORCH_CHECK((reinterpret_cast<uintptr_t>(A.data_ptr()) % 16) == 0, "A must be 16-byte aligned");
+    TORCH_CHECK((reinterpret_cast<uintptr_t>(B.data_ptr()) % 16) == 0, "B must be 16-byte aligned");
+    
+    auto C = torch::empty({M, N}, torch::dtype(torch::kFloat32).device(A.device()));
+    
+    const __half* A_ptr = reinterpret_cast<const __half*>(A.data_ptr<at::Half>());
+    const __half* B_ptr = reinterpret_cast<const __half*>(B.data_ptr<at::Half>());
+    float* C_ptr = C.data_ptr<float>();
+    
+    hipStream_t stream = c10::hip::getCurrentHIPStream(A.device().index()).stream();
+    
+    // 128×128 tiles (reduced from 256×128 to fit LDS limit)
+    constexpr int BLOCK_M = 128;
+    constexpr int BLOCK_N = 128;
+    
+    const int grid_m = (M + BLOCK_M - 1) / BLOCK_M;
+    const int grid_n = (N + BLOCK_N - 1) / BLOCK_N;
+    
+    dim3 grid(grid_n, grid_m);
+    dim3 block(256);  // 8 warps × 32
+    
+    wmma_gemm_kernel_opt<><<<grid, block, 0, stream>>>(A_ptr, B_ptr, C_ptr, M, N, K);
     
     C10_HIP_KERNEL_LAUNCH_CHECK();
     return C;
@@ -2070,104 +2116,6 @@ torch::Tensor wmma_matmul_coop(torch::Tensor A, torch::Tensor B) {
     return C;
 }
 
-// ============================================================================
-// FLASH ATTENTION FORWARD
-// ============================================================================
-
-torch::Tensor flash_attention_forward(
-    torch::Tensor Q,  // [B, H, N, D] or [B, N, H, D]
-    torch::Tensor K,
-    torch::Tensor V,
-    bool causal,
-    float scale
-) {
-    TORCH_CHECK(Q.is_cuda() && K.is_cuda() && V.is_cuda(), "Inputs must be CUDA tensors");
-    TORCH_CHECK(Q.device() == K.device() && K.device() == V.device(), "Inputs must be on same device");
-    TORCH_CHECK(Q.dtype() == torch::kFloat16, "Q must be float16");
-    TORCH_CHECK(K.dtype() == torch::kFloat16, "K must be float16");
-    TORCH_CHECK(V.dtype() == torch::kFloat16, "V must be float16");
-    TORCH_CHECK(Q.dim() == 4, "Q must be 4D [B, H, N, D]");
-    TORCH_CHECK(K.dim() == 4, "K must be 4D [B, H, N, D]");
-    TORCH_CHECK(V.dim() == 4, "V must be 4D [B, H, N, D]");
-    
-    Q = Q.contiguous();
-    K = K.contiguous();
-    V = V.contiguous();
-    
-    const int B = Q.size(0);      // Batch size
-    const int H = Q.size(1);      // Number of heads
-    const int N_q = Q.size(2);    // Query sequence length
-    const int D = Q.size(3);      // Head dimension
-    const int N_kv = K.size(2);   // Key/Value sequence length
-    
-    TORCH_CHECK(K.size(0) == B && V.size(0) == B, "Batch sizes must match");
-    TORCH_CHECK(K.size(1) == H && V.size(1) == H, "Number of heads must match");
-    TORCH_CHECK(K.size(3) == D && V.size(3) == D, "Head dimensions must match");
-    
-    // Block sizes - must be multiples of 16 for WMMA
-    const int Br = 32;  // Query block size
-    const int Bc = 32;  // Key block size
-    
-    // Pad sequence lengths to multiples of block size
-    const int N_q_pad = ((N_q + Br - 1) / Br) * Br;
-    const int N_kv_pad = ((N_kv + Bc - 1) / Bc) * Bc;
-    const int D_pad = ((D + 15) / 16) * 16;
-    
-    // Compute scale if not provided
-    if (scale < 0) {
-        scale = 1.0f / sqrtf(static_cast<float>(D));
-    }
-    // Note: scale is just 1/sqrt(D), no exp2 optimization in simple kernel
-    
-    // Allocate output
-    auto O = torch::zeros({B, H, N_q, D}, torch::dtype(torch::kFloat16).device(Q.device()));
-    
-    // Allocate logsumexp for backward (optional, can be nullptr)
-    auto L = torch::empty({B, H, N_q}, torch::dtype(torch::kFloat32).device(Q.device()));
-    
-    const __half* Q_ptr = reinterpret_cast<const __half*>(Q.data_ptr<at::Half>());
-    const __half* K_ptr = reinterpret_cast<const __half*>(K.data_ptr<at::Half>());
-    const __half* V_ptr = reinterpret_cast<const __half*>(V.data_ptr<at::Half>());
-    __half* O_ptr = reinterpret_cast<__half*>(O.data_ptr<at::Half>());
-    float* L_ptr = L.data_ptr<float>();
-    
-    hipStream_t stream = c10::hip::getCurrentHIPStream(Q.device().index()).stream();
-    
-    // Grid: (batch, head, num_q_blocks)
-    constexpr int THREADS_PER_BLOCK = 256;
-    const int num_q_blocks = (N_q + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
-    dim3 grid(B, H, num_q_blocks);
-    dim3 block(THREADS_PER_BLOCK);
-    
-    // Strides
-    const int64_t stride_qb = Q.stride(0);
-    const int64_t stride_qh = Q.stride(1);
-    const int64_t stride_qn = Q.stride(2);
-    const int64_t stride_kb = K.stride(0);
-    const int64_t stride_kh = K.stride(1);
-    const int64_t stride_kn = K.stride(2);
-    
-    if (causal) {
-        flash_attention_fwd_kernel_simple<true><<<grid, block, 0, stream>>>(
-            Q_ptr, K_ptr, V_ptr, O_ptr,
-            N_q, N_kv, D,
-            stride_qb, stride_qh, stride_qn,
-            stride_kb, stride_kh, stride_kn,
-            scale
-        );
-    } else {
-        flash_attention_fwd_kernel_simple<false><<<grid, block, 0, stream>>>(
-            Q_ptr, K_ptr, V_ptr, O_ptr,
-            N_q, N_kv, D,
-            stride_qb, stride_qh, stride_qn,
-            stride_kb, stride_kh, stride_kn,
-            scale
-        );
-    }
-    
-    C10_HIP_KERNEL_LAUNCH_CHECK();
-    return O;
-}
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // Original matmul functions (C = A × B)
@@ -2185,6 +2133,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("matmul_swizzled", &wmma_matmul_swizzled, "WMMA GEMM with XOR-swizzled LDS (bank conflict-free, 33% less LDS)");
     m.def("matmul_xor_optimized", &wmma_matmul_xor_optimized, "WMMA GEMM with corrected XOR swizzle and fragment layout (from wmma_optimizations.hpp)");
     m.def("matmul_coop", &wmma_matmul_coop, "WMMA GEMM with cooperative loading (half threads load A, half load B)");
+    m.def("matmul_pingpong", &wmma_matmul_pingpong, "WMMA GEMM with HipKittens-style ping-pong wave scheduling");
+    m.def("matmul_opt", &wmma_matmul_opt, "WMMA GEMM optimized (256x128 tiles, 4x4 warp tiling, vectorized epilogue)");
     
     // New BLAS-style GEMM functions (C = alpha * A × B + beta * C)
     m.def("gemm", &wmma_gemm, 
@@ -2203,12 +2153,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           py::arg("A"), py::arg("B"),
           py::arg("alpha") = 1.0, py::arg("beta") = 0.0,
           py::arg("C") = py::none());
-    
-    // Flash Attention
-    m.def("flash_attention", &flash_attention_forward,
-          "Flash Attention v2 forward pass (FP16)",
-          py::arg("Q"), py::arg("K"), py::arg("V"),
-          py::arg("causal") = false,
-          py::arg("scale") = -1.0f);
 }
 

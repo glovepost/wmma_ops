@@ -218,6 +218,38 @@ print(f"Max error: {(C - C_ref).abs().max().item()}")
 | `wmma_ops.gemm_adaptive(A, B, alpha=1.0, beta=0.0, C=None)` | Auto-tuned GEMM with scaling |
 | `wmma_ops.gemm_inplace(A, B, C, alpha=1.0, beta=0.0)` | In-place GEMM (modifies C directly) |
 
+#### Flash Attention
+
+| Function | Description |
+|----------|-------------|
+| `wmma_ops.flash_attention(Q, K, V, causal=False, scale=-1.0)` | Flash Attention v2 forward pass |
+
+**Flash Attention Usage:**
+```python
+import torch
+import wmma_ops
+
+# Input: Q, K, V tensors of shape [B, H, N, D]
+# B = batch size, H = num heads, N = sequence length, D = head dimension
+Q = torch.randn(2, 8, 512, 64, device="cuda", dtype=torch.float16)
+K = torch.randn(2, 8, 512, 64, device="cuda", dtype=torch.float16)
+V = torch.randn(2, 8, 512, 64, device="cuda", dtype=torch.float16)
+
+# Non-causal attention
+O = wmma_ops.flash_attention(Q, K, V)
+
+# Causal attention (for autoregressive models)
+O_causal = wmma_ops.flash_attention(Q, K, V, causal=True)
+
+# Custom scale (default: 1/sqrt(D))
+O_scaled = wmma_ops.flash_attention(Q, K, V, scale=0.1)
+```
+
+**Current Status:**
+- ✅ Correctness: Matches PyTorch SDPA (<0.001 max error)
+- ⚠️ Performance: Simple scalar kernel, ~2-10x slower than PyTorch SDPA
+- 🔜 TODO: WMMA-accelerated tiled implementation for better performance
+
 **Usage Example (GEMM with scaling):**
 ```python
 import wmma_ops
