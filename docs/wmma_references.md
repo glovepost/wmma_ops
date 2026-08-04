@@ -37,12 +37,58 @@ matrix_calculator.py -a gfx1151 -i v_wmma_f32_16x16x16_f16 -A -M -w 32
 ```
 Needs `tabulate`.
 
-**AMD composable_kernel** — `include/ck/tensor_operation/gpu/warp/wmma_gemm.hpp`,
-`include/ck/utility/amd_wmma.hpp`. AMD's production WMMA implementation, and it
-carries an ASCII layout diagram in-source: for WAVE32, registers `RC0..RC7` down
-the rows and threads across the columns, SubGroup 0 = lanes 0-15, SubGroup 1 =
-lanes 16-31. Independent third confirmation of the C/D layout. Also contains
-**FA2 forward for gfx11** (`CK_USE_WMMA`); backward is unsupported on RDNA3.
+**AMD composable_kernel** — canonical location is now
+<https://github.com/ROCm/rocm-libraries/tree/develop/projects/composablekernel>.
+`ROCm/composable_kernel` is **deprecated** ("Moved to ROCm/rocm-libraries repo",
+develop kept read-only), so prefer the new path; raw fetches from the old one
+still resolve and will silently go stale.
+
+AMD's production WMMA implementation, and the single most useful source here.
+
+- `include/ck/utility/amd_wmma.hpp` — the intrinsic wrappers. Its `__gfx11__`
+  macro **explicitly lists `__gfx1151__`** alongside gfx1100-1103 and
+  gfx1150/1152/1153, so gfx1151 is a first-class WMMA target in AMD's own
+  library, not an inherited one.
+- `include/ck/tensor_operation/gpu/warp/wmma_gemm.hpp` — carries an ASCII layout
+  diagram in-source: for WAVE32, registers `RC0..RC7` down the rows and threads
+  across the columns, SubGroup 0 = lanes 0-15, SubGroup 1 = lanes 16-31.
+  Independent third confirmation of the C/D layout.
+
+**Attention on gfx11 — the closest public prior art to a decode kernel:**
+
+```
+include/ck/tensor_operation/gpu/device/impl/
+    device_multi_query_attention_forward_wmma.hpp     <- MQA: one K/V head
+    device_grouped_query_attention_forward_wmma.hpp   <- GQA
+    device_batched_gemm_softmax_gemm_permute_wmma_cshuffle.hpp
+include/ck/tensor_operation/gpu/grid/
+    gridwise_batched_gemm_softmax_gemm_wmma_cshuffle.hpp
+example/32_batched_gemm_scale_softmax_gemm/
+    multi_query_attention_forward_wmma_fp16.cpp       <- instantiated tile configs
+    grouped_query_attention_forward_wmma_fp16.cpp
+    self_attention_forward_wmma_fp16.cpp
+    cross_attention_forward_wmma_fp16.cpp
+```
+
+The MQA header states our exact shape:
+
+```text
+// Multi-Query Attention (MQA) kernel implementation
+// Assume number of head of K,V is 1.
+// Q [G0, G1, M, K] * K [G0, 1, K, N] = P [G0, G1, M, N]
+// P [G0, G1, M, N] * V [G0, 1, N, O] = Out [G0, G1, M, O]
+```
+
+MLA decode is exactly this: one latent K/V head shared across every query head.
+The tile shapes AMD instantiates for gfx11 are worth reading before choosing our
+own — the smallest is `BlockSize 32` (a **single wave32**) with Gemm0
+`MPerBlock=16, LPerBlock=128, KPerBlock=64`, Gemm1 `NPerBlock=64, LTile=64`,
+WMMA 16x16x16, and repeats `MRepeat=1, LRepeat=8, NRepeat=4` — i.e. 16 query
+rows and 128 KV rows per block, one WMMA M-tile, iterating over L. That is a
+very different decomposition from a 256-thread block holding G heads, and it is
+AMD's answer for this instruction on this architecture.
+
+Forward only; backward is unsupported on gfx11.
 
 ---
 
