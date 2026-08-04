@@ -43,10 +43,15 @@ Each wave (32 threads) cooperatively loads and processes one 16×16 tile.
 > authoritative source here: the RDNA3.5 ISA (section 7.9) gives the operand types
 > and the lane-replication rule but explicitly defers the element-to-register
 > mapping to this tool. Running
-> `matrix_calculator.py -a rdna3 -i v_wmma_f32_16x16x16_f16 -A -M -w 32` reports
+> `matrix_calculator.py -a gfx1151 -i v_wmma_f32_16x16x16_f16 -A -M -w 32` reports
 > lane 29 -> `A[13][*]`, lane 30 -> `A[14][*]`, lane 31 -> `A[15][*]`: lane L holds
 > **row** `L % 16`, all 16 K values, two per VGPR (`v0{0}.[15:0] = A[0][0]`,
 > `v0{0}.[31:16] = A[0][1]`).
+>
+> Pass the gfx target, not the generic arch name. The calculator maps
+> `gfx1150/1151/1152/1153` (RDNA3.5) onto its `rdna3` matrix model — output is
+> byte-identical — so the WMMA layout and timings below are AMD's answer for
+> gfx1151, not an RDNA3 result assumed to carry over.
 >
 > The GPUOpen article describes A as "each lane stores one column", which reads as
 > the opposite of this. Its code is right; its prose is not. That is the bug fixed

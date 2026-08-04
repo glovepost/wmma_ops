@@ -161,8 +161,8 @@ compute.
 ### One RDNA3 caveat for the WMMA plan
 
 AMD's MI450 decode guide advises splitting the softmax into two stages so the
-hardware can interleave WMMA with VALU work. That does **not** transfer here. The
-AMD Matrix Instruction Calculator reports, for `v_wmma_f32_16x16x16_f16` on RDNA3:
+hardware can interleave WMMA with VALU work. That does **not** transfer here.
+`matrix_calculator.py -a gfx1151 -i v_wmma_f32_16x16x16_f16 -d` reports:
 
 ```
 Execution cycles: 32
@@ -170,8 +170,14 @@ FLOPs: 8192          FLOPs/WGP/cycle: 1024
 Can co-execute with VALU: False
 ```
 
-On this architecture the softmax VALU work and the matrix ops serialise however
-they are scheduled. Budget for that when porting CDNA decode recipes.
+On gfx1151 the softmax VALU work and the matrix ops serialise however they are
+scheduled. Budget for that when porting CDNA decode recipes.
+
+(The calculator's architecture table maps `gfx1150/1151/1152/1153` — the RDNA3.5
+parts — onto its `rdna3` matrix model, and `-a gfx1151` output is byte-identical
+to `-a rdna3`. So these figures are AMD's answer *for gfx1151*: the WMMA
+instruction characteristics are unchanged from RDNA3. Always pass the gfx target
+rather than the generic arch name, so the tool answers for the part in hand.)
 
 So the ordering is: **WMMA first, then raise G**. Raising G without it is
 measurably counterproductive. The fragment layouts, the lane-replication rule and
