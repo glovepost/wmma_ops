@@ -18,6 +18,7 @@ Based on llama.cpp rocWMMA optimizations (PR #16827) and [Sébastien Vince's Dee
 - [Key Optimizations](#key-optimizations)
 - [Optimization Techniques](#optimization-techniques)
 - [Decode-Attention Findings](docs/decode_attention_gfx1151.md)
+- [RDNA3.5 / WMMA Reference Material](docs/wmma_references.md)
 - [Profiling and Analysis](#profiling-and-analysis)
 - [Remaining Gap to rocBLAS](#remaining-gap-to-rocblas)
 - [File Structure](#file-structure)
@@ -913,6 +914,14 @@ wmma_ops/
 ---
 
 ## References
+
+> **See [docs/wmma_references.md](docs/wmma_references.md)** for the annotated
+> version: sources ranked by how much weight each can carry, with what each is
+> authoritative *for*. It flags the ones that are wrong or misleading on specific
+> points (the GPUOpen A-fragment prose; the ROCm "RDNA3.5 system optimization"
+> page, which contains no architecture), records the three independent
+> confirmations of the C/D output layout, and notes the RDNA3-vs-RDNA4 lane
+> mapping difference that transposes silently when code is ported.
 
 ### Primary Resources
 
