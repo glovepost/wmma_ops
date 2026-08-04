@@ -17,6 +17,7 @@ Based on llama.cpp rocWMMA optimizations (PR #16827) and [Sébastien Vince's Dee
 - [Kernel Variants](#kernel-variants)
 - [Key Optimizations](#key-optimizations)
 - [Optimization Techniques](#optimization-techniques)
+- [Decode-Attention Findings](docs/decode_attention_gfx1151.md)
 - [Profiling and Analysis](#profiling-and-analysis)
 - [Remaining Gap to rocBLAS](#remaining-gap-to-rocblas)
 - [File Structure](#file-structure)
@@ -462,6 +463,12 @@ For detailed information on fragment layouts, see [docs/wmma_fragment_layout_rdn
 | Inline Assembly Scheduling | No Change | Compiler scheduling already optimal |
 | High-Occupancy Variant | Slower | Latency hiding > occupancy for this workload |
 
+> **Regime caveat**: the table above is measured on a compute-bound large GEMM
+> (36% of FP16 peak). On a memory-bound q=1 attention decode kernel at 88% of
+> achievable bandwidth, double buffering measures **-18%** and occupancy beats
+> latency hiding — LDS capacity gates resident blocks directly. See
+> [docs/decode_attention_gfx1151.md](docs/decode_attention_gfx1151.md).
+
 ---
 
 ## Optimization Techniques
@@ -521,6 +528,20 @@ Where `f(row)` is chosen such that threads accessing different rows but same log
 4. **Compiler optimization**: 2D arrays with padding are easier for the compiler to optimize
 
 **Recommendation**: Use **padding approach** for gfx1151. The 33% LDS savings from XOR swizzle doesn't compensate for the ~15-20% performance loss.
+
+#### Third Option: Fix the Lane Mapping
+
+Padding and swizzle both change where data *sits*. When several lanes cooperate
+on one long dot product, the conflict can instead come from where lanes *read*,
+and neither helps. Giving each lane a contiguous chunk (`d = lane*DPT + t`) puts
+consecutive lanes 64 B apart — an 8-way conflict. Striding by the number of
+cooperating lanes (`d = t*TPR + lane`) puts them on consecutive 4-byte words:
+conflict-free, and `half2` loads fall out for free.
+
+Measured **+22%** on the MLA decode kernel (675.7 -> 555.9 us at n_kv=8896,
+108 -> 131 GB/s). Note that vectorising while *keeping* the blocked mapping was
+slower than scalar — the conflict was the cost, not the scalar loads. Details in
+[docs/decode_attention_gfx1151.md](docs/decode_attention_gfx1151.md).
 
 #### Critical Implementation Fixes for XOR Swizzle
 
