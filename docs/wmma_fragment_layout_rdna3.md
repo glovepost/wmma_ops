@@ -39,6 +39,19 @@ Each wave (32 threads) cooperatively loads and processes one 16×16 tile.
 
 **Key insight**: Each lane loads one **row** of the A matrix (all 16 K values of that row).
 
+> **Verified** with the AMD Matrix Instruction Calculator, which is the
+> authoritative source here: the RDNA3.5 ISA (section 7.9) gives the operand types
+> and the lane-replication rule but explicitly defers the element-to-register
+> mapping to this tool. Running
+> `matrix_calculator.py -a rdna3 -i v_wmma_f32_16x16x16_f16 -A -M -w 32` reports
+> lane 29 -> `A[13][*]`, lane 30 -> `A[14][*]`, lane 31 -> `A[15][*]`: lane L holds
+> **row** `L % 16`, all 16 K values, two per VGPR (`v0{0}.[15:0] = A[0][0]`,
+> `v0{0}.[31:16] = A[0][1]`).
+>
+> The GPUOpen article describes A as "each lane stores one column", which reads as
+> the opposite of this. Its code is right; its prose is not. That is the bug fixed
+> in `e61b06b` and `acaabd4` — please do not "fix" it back.
+
 **Lane replication**: Lanes 0-15 and lanes 16-31 must contain identical data.
 
 ### B Matrix Fragment (16×16, FP16)

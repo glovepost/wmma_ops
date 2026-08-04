@@ -539,7 +539,10 @@ cooperating lanes (`d = t*TPR + lane`) puts them on consecutive 4-byte words:
 conflict-free, and `half2` loads fall out for free.
 
 Measured **+22%** on the MLA decode kernel (675.7 -> 555.9 us at n_kv=8896,
-108 -> 131 GB/s). Note that vectorising while *keeping* the blocked mapping was
+108 -> 131 GB/s), plus a further **+8.6%** from padding the tile row stride by
+**+32 halves** — not +8: two rows of 16 lanes each need a half-bank-count shift to
+separate. Together 675.7 -> 512.1 us and **142 GB/s = 96% of achievable
+bandwidth**. Note that vectorising while *keeping* the blocked mapping was
 slower than scalar — the conflict was the cost, not the scalar loads. Details in
 [docs/decode_attention_gfx1151.md](docs/decode_attention_gfx1151.md).
 

@@ -51,12 +51,42 @@ for (int t = 0; t < DPT / 2; ++t) {
 ```
 
 Same dims, same F32 accumulation, deterministic. **+22%** (675.7 -> 555.9 us at
-n_kv=8896), and it moved the kernel from 108 GB/s to **131 GB/s**.
+n_kv=8896), 108 -> 131 GB/s.
 
 Worth noting because the first attempt at vectorising this kept the blocked
 mapping (`idx = lane*(DPT/2) + t`) and was *slower* than scalar — the conflict,
-not the scalar loads, was the cost. Padding the row stride would not have helped
-here: the collision is within a row, not across rows.
+not the scalar loads, was the cost.
+
+### ...but interleaving alone is not enough: pad the row stride too
+
+Verified against the RDNA3.5 ISA (section 12.1): LDS is *"64 banks of DWORD-wide
+RAMs ... sub-divided into two sets of 32-banks each"*, and *"DWORDs are placed in
+the banks serially"*. So `bank = (byte_addr / 4) % 32` for a wave, and conflicting
+accesses are serialised.
+
+Working the interleaved mapping through that rule shows it is **still 2-way
+conflicted**, which the first version of this document got wrong. A 32-lane wave
+covers two KV rows (16 lanes each). The unpadded row stride is `D` halves = 256
+DWORDs, an exact multiple of 32, so row 1 aliases row 0 bank-for-bank:
+
+| ktile row stride | distinct banks across the wave | worst case |
+|------------------|-------------------------------:|-----------:|
+| 512 halves (unpadded) | 16 | 2-way |
+| 520 (+8, the README's GEMM padding) | 20 | 2-way |
+| 528 (+16) | 24 | 2-way |
+| **544 (+32)** | **32** | **1-way (none)** |
+
+`+8` is the right pad for a `BLOCK_K=16` GEMM tile but does nothing here — the
+shift has to be half the bank count in DWORDs to separate two rows whose lanes
+each span 16 consecutive banks. `+32` halves (64 B, 1 KB per 16-row tile) makes
+it conflict-free:
+
+```cpp
+constexpr int KSTRIDE = D + 32;   // NOT D + 8
+```
+
+Measured **another +8.6%** on top of the interleaving (555.9 -> 512.1 us at
+n_kv=8896), reaching **142 GB/s = 96% of the ~148 GB/s this part sustains**.
 
 ---
 
@@ -68,19 +98,19 @@ scale and sink concat — taken from rocprofv3 traces of the live server.
 
 | n_kv | decode kernel | expl_full | speedup | GB/s | max abs err |
 |------|--------------:|----------:|--------:|-----:|------------:|
-| 128  |  21.2 us |  40.1 us | 1.89x |  49 | 4.5e-08 |
-| 256  |  30.4 us |  48.3 us | 1.59x |  69 | 7.5e-08 |
-| 416  |  41.3 us |  66.7 us | 1.61x |  82 | 6.0e-08 |
-| 512  |  46.1 us |  75.3 us | 1.63x |  91 | 4.8e-08 |
-| 768  |  61.7 us | 101.6 us | 1.65x | 102 | 4.8e-08 |
-| 960  |  80.2 us | 114.9 us | 1.43x |  98 | 4.1e-08 |
-| 1616 | 119.3 us |        - |     - | 111 | - |
-| 3278 | 218.4 us |        - |     - | 123 | - |
-| 8896 | 556.2 us | 1178.4 us | **2.12x** | **131** | - |
+| 128  |  20.3 us |  40.1 us | 1.98x |  52 | 4.5e-08 |
+| 256  |  29.2 us |  48.3 us | 1.65x |  72 | 7.5e-08 |
+| 416  |  39.2 us |  66.7 us | 1.70x |  87 | 6.0e-08 |
+| 512  |  43.5 us |  75.3 us | 1.73x |  97 | 4.8e-08 |
+| 768  |  57.7 us | 101.6 us | 1.76x | 109 | 4.8e-08 |
+| 960  |  69.3 us | 114.9 us | 1.66x | 113 | 4.1e-08 |
+| 1616 | 110.6 us |        - |     - | 120 | - |
+| 3278 | 201.4 us |        - |     - | 133 | - |
+| 8896 | 512.1 us | 1178.4 us | **2.30x** | **142** | - |
 
 Sustained achievable bandwidth on this part measures **~148 GB/s** (independently
 from production GEMM traces: 72.9 MB in 492.6 us), against ~256 GB/s theoretical.
-So 131 GB/s is **88% of achievable** — comparable to the 85%-of-peak that AMD's
+So 142 GB/s is **96% of achievable** — comparable to the 85%-of-peak that AMD's
 own MI450 decode guide reports.
 
 ---
@@ -117,7 +147,7 @@ n_kv=8896, it is not:
 
 | G | KV traffic | time | effective |
 |---|-----------:|-----:|----------:|
-|  8 | 72.9 MB | 555.9 us | 131 GB/s |
+|  8 | 72.9 MB | 512.1 us | 142 GB/s |
 | 16 | 36.4 MB | 713.8 us |  51 GB/s |
 | 32 | 18.2 MB | 786.7 us |  23 GB/s |
 | 64 |  9.1 MB | 829.9 us |  11 GB/s |
@@ -127,6 +157,21 @@ bandwidth-bound — it is scalar-FMA compute plus register pressure (the
 accumulator is `2G` VGPRs/thread; G=64 is 128 VGPRs). The 9.1 MB floor would be
 ~62 us at 148 GB/s, i.e. **19x** over the explicit path, and all of that gap is
 compute.
+
+### One RDNA3 caveat for the WMMA plan
+
+AMD's MI450 decode guide advises splitting the softmax into two stages so the
+hardware can interleave WMMA with VALU work. That does **not** transfer here. The
+AMD Matrix Instruction Calculator reports, for `v_wmma_f32_16x16x16_f16` on RDNA3:
+
+```
+Execution cycles: 32
+FLOPs: 8192          FLOPs/WGP/cycle: 1024
+Can co-execute with VALU: False
+```
+
+On this architecture the softmax VALU work and the matrix ops serialise however
+they are scheduled. Budget for that when porting CDNA decode recipes.
 
 So the ordering is: **WMMA first, then raise G**. Raising G without it is
 measurably counterproductive. The fragment layouts, the lane-replication rule and
