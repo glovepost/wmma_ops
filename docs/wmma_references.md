@@ -12,7 +12,13 @@ Context: gfx1151 (Strix Halo, RDNA3.5), wave32, `v_wmma_f32_16x16x16_f16`.
 ## Tier 1 — primary, verified
 
 **AMD "RDNA3.5" Instruction Set Architecture Reference Guide** (doc 70649,
-2024-07-23). The ground truth.
+2024-07-23). The ground truth. **Now in this repo**:
+[`rdna35_instruction_set_architecture.md`](rdna35_instruction_set_architecture.md)
+(machine-readable conversion, section numbers preserved so any claim can be
+cited as e.g. "ISA 12.1" and checked against the PDF), with the figure pages
+that do not survive text extraction rendered under
+[`rdna35_figures/`](rdna35_figures/) — notably pages 85-86, the WMMA VGPR
+layout diagrams, which exist nowhere in the text layer.
 - §7.9 WMMA: operand table, the lane-replication rule verbatim, round-to-nearest-even.
 - §7.9 **figures**: "A / B / C & D Matrix: VGPR View for Wave32" — the full
   element-to-register mapping. **Vector figures: invisible to `pdftotext` and to
