@@ -3149,6 +3149,45 @@ use of 128-bit cooperative copies and explicit load/WMMA/store schedule groups.
 These references informed the queued experiments; they are not performance
 evidence by themselves.
 
+### Compact ping-pong and wide-workgroup closure
+
+The final occupancy-preserving barrier pass tested three new FP16-output
+architectures rather than retuning the retained loop:
+
+- Direct A with double-buffered shared B was exact at 140 VGPR and 12 KiB LDS,
+  but duplicate wave-level A traffic limited it to 26.790 TFLOPS.
+- A persistent 80-workgroup kernel kept one 256-row A block resident while
+  walking N shards.  Static outer-loop unrolling removed spills, but allocation
+  remained 256 VGPR, occupancy fell to one block, and throughput was 35.709
+  TFLOPS.
+- A compact interleaved ping-pong layout placed buffer 0 in halves 0--15 and
+  buffer 1 in halves 24--39 of an LDS row.  The 40-half pitch fits both A/B
+  buffers in 30 KiB and needs one publish barrier per K16.  The C++ form used
+  186 VGPR and reached 40.757 TFLOPS.  Hand scheduling restored 118 VGPR, zero
+  spills, and two blocks/16 waves, but the best placement reached 46.024
+  TFLOPS versus roughly 48.1 for its bracketed p8 control.
+
+Pitches 32--42 and both legal end placements were screened.  Only pitch 40
+retained useful throughput; neighboring correct forms clustered near 22
+TFLOPS.  A second compact construction alternated 24- and 16-half A-row
+strides, leaving B at p8 and fitting two complete ping-pong tiles in exactly
+32 KiB.  Both parity orientations passed full validation at 44.912--44.947
+TFLOPS.  The exercise is a useful warning: balanced static bank counts do not
+capture the actual LDS issue schedule.
+
+A 512x128 geometry then doubled work per workgroup and B reuse while retaining
+the ordinary 64x64 per-wave tile.  Selective B loaders compiled at 137 VGPR and
+37.653 TFLOPS.  Duplicating cache-resident B loads removed the divergent path
+and cut allocation to 124 VGPR, but gfx1151 still admitted one 16-wave block
+per CU and throughput fell to 35.850 TFLOPS.  Larger workgroups do not create
+more latency-hiding waves on this target.
+
+The independent A/B padding sweep confirms p8 as the unique single-buffer
+optimum, including previously untested odd strides.  A reversible CPU-EPP
+bracket changed the p8 leader by only 0.35% with the GPU fixed at 2.9 GHz.
+The retained result is therefore still 48.614 TFLOPS sustained under the
+block/K16-prepacked FP16-output contract; the 50-TFLOPS gate is not met.
+
 ### Shared-box validation discipline
 
 Every model-loading or GPU profiling command must acquire `/root/gpu.lock`.

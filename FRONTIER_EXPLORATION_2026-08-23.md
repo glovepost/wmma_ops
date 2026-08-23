@@ -305,6 +305,54 @@ allocation is the fundamental obstacle to producer/consumer specialization,
 but its solution requires new shared-register hardware and ISA support.  It
 does not supply an implementable gfx1151 path.
 
+### Late one-barrier and geometry sweep
+
+The remaining one-barrier layouts were implemented and screened against a
+bracketed p8 leader.  Every accepted timing below passed the same full rocBLAS
+reference tuple (normalized maximum error 0.018779343, RMS 0.035428338, cosine
+0.999977929).
+
+| Candidate | Resources | TFLOPS | Decision |
+|---|---:|---:|---|
+| Direct A / shared B | 140 VGPR, 12 KiB LDS | 26.790 | Duplicate direct-A traffic dominates |
+| Persistent 80-workgroup A-row owner | 256 VGPR, 18 KiB LDS | 35.709 | One active block; serial N shards lose |
+| Interleaved ping-pong, compiler | 186 VGPR, 30 KiB LDS | 40.757 | Correct layout, excessive allocation |
+| Interleaved ping-pong, hand p40/o16 | 118 VGPR, 30 KiB LDS | 46.024 | Best compact one-barrier form; behind p8 |
+| Periodic compact A / p8 B ping-pong | 118 VGPR, 32 KiB LDS | 44.947 | Two blocks retained; LDS schedule still loses |
+| 512x128, selective B loaders | 137 VGPR, 30 KiB LDS | 37.653 | One 16-wave block per CU |
+| 512x128, duplicate B loaders | 124 VGPR, 30 KiB LDS | 35.850 | Lower VGPR does not lift the 16-wave CU cap |
+
+The interleaved layout packs two 16-half buffers into each 40-half LDS row.
+Its 80-byte row displacement is the modular inverse of p8's 48-byte
+displacement and fits two complete operand buffers in 30 KiB.  Hand scheduling
+recovered the leader's 118-VGPR allocation and improved the compiler form by
+13%, but the altered bank phase still costs more than the removed barrier
+saves.  A complete pitch/placement sweep found p40 uniquely fast: p33--p39 and
+p41--p42 forms clustered near 22 TFLOPS; the two p40 placements reached 45.812
+and 46.024 TFLOPS.
+
+The periodic form compressed only A.  Alternating 24- and 16-half row strides
+fits two A buffers plus two ordinary p8 B buffers in exactly 32 KiB while
+keeping the static bank-use count balanced.  Both parity orientations were
+exact, but reached only 44.912--44.947 TFLOPS.  Static bank counts are therefore
+not a sufficient predictor of the gfx1151 LDS schedule.
+
+An independent single-buffer padding audit covered A=1--15 with B=p8 and
+B=1--15 with A=p8.  P8 is a singular optimum on both operands.  Odd padding
+fell to roughly 32.4--38.0 TFLOPS; non-p8 even B padding reached about
+41.2--41.4, and non-p8 even A padding about 37.3--38.1.  There is no missed
+asymmetric padding win.
+
+Finally, CPU energy preference was changed reversibly inside one exclusive
+GPU bracket while the GPU remained fixed at its high 2.9-GHz state.
+Performance/power/balance-power/performance measured
+47.763/47.881/47.932/47.862 TFLOPS.  The 0.35% span is far smaller than the
+remaining 2.8% target gap; CPU package policy is not a promotion path.
+
+These results leave the 48.614-TFLOPS p8 single-buffer kernel as the retained
+FP16-output leader.  Its 49.573-TFLOPS short maximum and isolated 50+ samples
+remain non-promotable; no sustained 50-TFLOPS result has been recorded.
+
 Both queued cache mappings passed full-reference validation but regressed:
 plain 5x8 reached 46.640 TFLOPS and cyclic-skewed 5x8 reached 45.985 TFLOPS,
 against 47.793 TFLOPS in the same control pass.  `s_setprio` was worse at
@@ -372,6 +420,7 @@ The correct block/K-major p8 kernel materially exceeds the original-layout
 control and has reached 48.614 TFLOPS sustained in the longer screen and
 49.573 TFLOPS in the best short pass.  It remains a distinct persistent-input
 contract and has not met the 50 TFLOPS promotion gate, so no published source
-or documentation has been changed.  Continue with occupancy-preserving
-barrier reduction and codegen scheduling; do not promote isolated 50+ samples
-that fail the sustained same-pass control.
+record has been changed.  The research kernels and negative results are kept
+for reproducibility.  Continue with occupancy-preserving barrier reduction and
+codegen scheduling; do not promote isolated 50+ samples that fail the
+sustained same-pass control.

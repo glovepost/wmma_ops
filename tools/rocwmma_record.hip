@@ -26,6 +26,18 @@
 #if RECORD_WAVEPRIVATE_A
 #include <rocm_wmma_gemm/kernel/waveprivate_a.hpp>
 #endif
+#if RECORD_DIRECT_A_SHARED_B
+#include <rocm_wmma_gemm/kernel/direct_a_shared_b.hpp>
+#endif
+#if RECORD_PERSISTENT_BLOCK
+#include <rocm_wmma_gemm/kernel/persistent_block.hpp>
+#endif
+#if RECORD_INTERLEAVED_PINGPONG
+#include <rocm_wmma_gemm/kernel/interleaved_pingpong.hpp>
+#endif
+#if RECORD_BLOCK_512X128
+#include <rocm_wmma_gemm/kernel/block_512x128.hpp>
+#endif
 
 #include <algorithm>
 #include <bit>
@@ -111,6 +123,21 @@ namespace {
 #ifndef RECORD_WAVEPRIVATE_A
 #define RECORD_WAVEPRIVATE_A 0
 #endif
+#ifndef RECORD_DIRECT_A_SHARED_B
+#define RECORD_DIRECT_A_SHARED_B 0
+#endif
+#ifndef RECORD_PERSISTENT_BLOCK
+#define RECORD_PERSISTENT_BLOCK 0
+#endif
+#ifndef RECORD_GRID_BLOCKS
+#define RECORD_GRID_BLOCKS 0
+#endif
+#ifndef RECORD_INTERLEAVED_PINGPONG
+#define RECORD_INTERLEAVED_PINGPONG 0
+#endif
+#ifndef RECORD_BLOCK_512X128
+#define RECORD_BLOCK_512X128 0
+#endif
 #ifndef RECORD_BLOCK_SLICE_MAJOR
 #define RECORD_BLOCK_SLICE_MAJOR 0
 #endif
@@ -118,7 +145,9 @@ namespace {
 #define RECORD_PRODUCER_WAVES 5
 #endif
 #define RECORD_BLOCK_CONTRACT \
-    (RECORD_BLOCK_PREPACKED | RECORD_BLOCK_K2_RING | RECORD_WAVEPRIVATE_A)
+    (RECORD_BLOCK_PREPACKED | RECORD_BLOCK_K2_RING | RECORD_WAVEPRIVATE_A \
+     | RECORD_DIRECT_A_SHARED_B | RECORD_PERSISTENT_BLOCK \
+     | RECORD_INTERLEAVED_PINGPONG | RECORD_BLOCK_512X128)
 
 constexpr int kSize = 4096;
 constexpr int kWarmupDefault = 200;
@@ -129,7 +158,15 @@ constexpr double kPromotionTargetTflops = 50.0;
 // Tuned parameter order:
 // warps_m, warps_n, warp_tile_m, warp_tile_n, k_slices, single_buffer,
 // swizzle, vector bits, alignment fast path.
-#if RECORD_WAVEPRIVATE_A
+#if RECORD_BLOCK_512X128
+using RecordKernel = rocm_wmma_gemm::block_512x128_gemm;
+#elif RECORD_INTERLEAVED_PINGPONG
+using RecordKernel = rocm_wmma_gemm::interleaved_pingpong_gemm;
+#elif RECORD_PERSISTENT_BLOCK
+using RecordKernel = rocm_wmma_gemm::persistent_block_gemm;
+#elif RECORD_DIRECT_A_SHARED_B
+using RecordKernel = rocm_wmma_gemm::direct_a_shared_b_gemm;
+#elif RECORD_WAVEPRIVATE_A
 using RecordKernel = rocm_wmma_gemm::waveprivate_a_gemm;
 #elif RECORD_BLOCK_K2_RING
 using RecordKernel = rocm_wmma_gemm::block_k2_ring_gemm;
@@ -343,7 +380,9 @@ int main(int argc, char** argv) {
     HIP_CHECK(hipStreamCreate(&stream));
     const int grid_m = (kSize + kBlockM - 1) / kBlockM;
     const int grid_n = (kSize + kBlockN - 1) / kBlockN;
-    const dim3 grid(grid_m * grid_n);
+    const dim3 grid(RECORD_GRID_BLOCKS > 0
+                        ? RECORD_GRID_BLOCKS
+                        : grid_m * grid_n);
     const dim3 block(kThreads);
     int active_blocks_per_cu = 0;
     HIP_CHECK(hipOccupancyMaxActiveBlocksPerMultiprocessor(

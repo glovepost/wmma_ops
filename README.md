@@ -28,6 +28,7 @@ package-power window, not finding a one-off peak.
 |---|---|---|---|
 | **41.322 TFLOPS** | 4096 cubed | FP16 inputs, FP32 accumulate/output | Validated standalone peak |
 | **40.900 TFLOPS median** | 4096 cubed | Same | Five fresh processes; strict gate not met |
+| **48.614 TFLOPS** | 4096 cubed | block/K16-prepacked FP16 inputs/output | Longer screening run; distinct persistent-input contract |
 | **46.082 TFLOPS median** | 4096 cubed | FP16 inputs/output | Upstream `bench_half_half`; separate numerical contract |
 | **85.907 INT4 TOPS** | 4096 cubed | prepacked linear W4A4, INT32 output | Exact full-output validation; separate numerical contract |
 | **110.229 INT4 TOPS** | IU4 issue-rate microbenchmark | signed INT4 inputs, INT32 accumulate | ISA qualification only; not an FP16 GEMM result |
@@ -43,6 +44,13 @@ upstream 42.92 TFLOPS table entry. All 208 upstream same-precision tests passed.
 This does not replace the project record: the output type differs, and the
 upstream suite does not validate every output at the exact 4096-cubed benchmark
 shape. See the performance ledger for the full command and timing distribution.
+
+The separate block/K16-prepacked experiment reaches 48.614 TFLOPS in its
+longer screen (2.827130 ms) and reproduces the full 16,777,216-element rocBLAS
+error tuple.  It assumes persistent, block-packed A and B inputs, so it is not
+comparable to the ordinary-layout FP32 record or to a call that includes
+packing.  Its best isolated short sample is 49.573 TFLOPS; isolated 50+ samples
+failed sustained same-pass checks and are not promoted.
 
 The clock-derived nominal ceiling is 59.4 TFLOPS: 20 WGPs x 1024
 FLOP/WGP/cycle x 2.9 GHz. It is not a measured sustained ceiling.

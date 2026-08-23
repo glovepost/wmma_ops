@@ -261,6 +261,24 @@ This result demonstrates that a full data-moving IU4 kernel can exceed the
 50-operations/s target, but it remains a distinct integer contract.  It is not
 eligible for the FP16 TFLOPS table or record gate.
 
+The current FP16-output, block/K16-prepacked research leader is 48.614 TFLOPS
+at 4096 cubed (2.827130 ms).  It uses a 256x128 block, eight waves, p8 A/B LDS
+rows, 118 VGPR, 22 SGPR, 18 KiB LDS, and no spills.  The result passed a full
+rocBLAS reference check, but it is a persistent-input contract: packing is
+outside the timed region.  A 49.573-TFLOPS short sample and two isolated 50+
+samples were rejected because longer same-pass runs returned to roughly
+47.4--48.6 TFLOPS.  The 50-TFLOPS FP16 promotion gate therefore remains open.
+
+The latest occupancy-preserving barrier experiments did not close that gap.
+A hand-scheduled compact interleaved ping-pong kernel retained 118 VGPR, two
+blocks/16 waves, 30 KiB LDS, and one barrier per K16, but reached only 46.024
+TFLOPS in its best row-pitch placement.  A periodic compact-A/p8-B form fit
+exactly 32 KiB and reached 44.947 TFLOPS.  A 512x128, 16-wave block was exact
+at 124 VGPR and 30 KiB, but gfx1151 still admitted only one block/16 waves and
+it reached 35.850 TFLOPS.  Lowering CPU energy preference while keeping the
+GPU at 2.9 GHz changed the p8 leader by only about 0.35%, so package policy is
+not the missing 2.8%.
+
 At 256 GB/s, the corresponding compute-to-memory ridge point is about
 232 FLOP/byte (`59.4e12 / 256e9`), not 106 FLOP/byte. Both inputs should be
 replaced by observed clocks and sustained bandwidth when making a measured
