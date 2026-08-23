@@ -1,957 +1,296 @@
-# rocWMMA Patch for PyTorch on gfx1151
+# wmma-ops
 
-**Optimized WMMA (Wave Matrix Multiply-Accumulate) operations for AMD gfx1151 (RDNA3.5 / Strix Halo) architecture**
+Experimental FP16-input, FP32-accumulation WMMA GEMM kernels for AMD Strix
+Halo (`gfx1151`), exposed as a PyTorch extension and accompanied by standalone
+HIP benchmarks.
 
-Based on llama.cpp rocWMMA optimizations (PR #16827) and [Sébastien Vince's Deep Dive into Matrix Optimization on AMD GPUs](https://seb-v.github.io/optimization/update/2025/01/20/Fast-GPU-Matrix-multiplication.html).
+The project is a performance laboratory, not a drop-in replacement for
+rocBLAS. Its useful outputs are the gfx1151 fragment helpers, a collection of
+kernel schedules, and a reproducible method for deciding whether a result is
+both correct and faster.
 
----
+## Current status
 
-## Table of Contents
+The best fully validated standalone sample is **41.321799 TFLOPS**
+(3.326064 ms) for a 4096 x 4096 x 4096 GEMM. The contract is FP16 A/B, FP32
+accumulation, and FP32 output. Every one of the 16,777,216 output values was
+checked against a rocBLAS FP32 reference.
 
-- [Executive Summary](#executive-summary)
-- [Performance Results](#performance-results)
-- [Building](#building)
-- [Usage](#usage)
-- [Testing](#testing)
-- [Architecture Details](#architecture-details)
-- [Kernel Variants](#kernel-variants)
-- [Key Optimizations](#key-optimizations)
-- [Optimization Techniques](#optimization-techniques)
-- [Decode-Attention Findings](docs/decode_attention_gfx1151.md)
-- [RDNA3.5 / WMMA Reference Material](docs/wmma_references.md)
-- [Profiling and Analysis](#profiling-and-analysis)
-- [Remaining Gap to rocBLAS](#remaining-gap-to-rocblas)
-- [File Structure](#file-structure)
-- [References](#references)
+That number is a validated peak, not yet a sustained record. Five fresh
+processes produced a 40.900 TFLOPS median and a 40.772-41.104 TFLOPS range;
+only two process medians exceeded the 41 TFLOPS target. Two later clean-build
+audits remained correct but ranged from 40.244 to 40.939 TFLOPS. The current
+work is therefore about raising the performance floor and understanding the
+package-power window, not finding a one-off peak.
 
----
+| Result | Shape | Numerical contract | Status |
+|---|---|---|---|
+| **41.322 TFLOPS** | 4096 cubed | FP16 inputs, FP32 accumulate/output | Validated standalone peak |
+| **40.900 TFLOPS median** | 4096 cubed | Same | Five fresh processes; strict gate not met |
+| 21.6 TFLOPS | 4096 cubed | FP16 inputs, FP32 output | Historical PyTorch-extension result |
+| about 41 TFLOPS | 4096 cubed | FP16 inputs/output | Historical `torch.mm` comparison; different contract |
 
-## Executive Summary
+The clock-derived nominal ceiling is 59.4 TFLOPS: 20 WGPs x 1024
+FLOP/WGP/cycle x 2.9 GHz. It is not a measured sustained ceiling.
 
-Successfully implemented and optimized a rocWMMA GEMM kernel for PyTorch targeting gfx1151, achieving **21.6 TFLOPS peak** (36% of theoretical 59.4 TFLOPS) with correct results across all test configurations.
+Read [the performance ledger](docs/PERFORMANCE_STATUS.md) before comparing
+numbers. It contains the exact schedule, distributions, rejected experiments,
+resource metadata, and promotion rules.
 
-This represents a **4× improvement** over the initial implementation (5.4 → 21.6 TFLOPS) through systematic optimization, reaching **53% of rocBLAS FP16** performance.
+## Documentation
 
-### Quick Stats
+| Document | Use it for |
+|---|---|
+| [Documentation index](docs/README.md) | Map of current, historical, and reference material |
+| [Performance status](docs/PERFORMANCE_STATUS.md) | Current measurements, source audit, and next experiments |
+| [Profiling guide](docs/PROFILING.md) | Timing, counters, ISA inspection, and shared-host discipline |
+| [WMMA fragment layout](docs/wmma_fragment_layout_rdna3.md) | Verified gfx1151 lane/register mappings |
+| [Annotated references](docs/wmma_references.md) | Primary AMD sources and architecture-porting hazards |
+| [Decode-attention findings](docs/decode_attention_gfx1151.md) | Separate bandwidth-bound attention investigation |
+| [Development notebook](docs/WMMA_DEVELOPMENT_NOTES.md) | Historical experiments; not authoritative current status |
+| [RDNA3.5 ISA conversion](docs/rdna35_instruction_set_architecture.md) | Searchable conversion of AMD document 70649 |
 
-| Metric | Value |
-|--------|-------|
-| **Peak TFLOPS** | 21.6 (4096×4096) |
-| **Utilization** | 36% of 59.4 TFLOPS peak |
-| **vs rocBLAS FP16** | 53% (rocBLAS: ~41 TFLOPS) |
-| **Improvement** | 4× over baseline |
-| **Correctness** | ✅ All tests pass (rel_err < 1%) |
+## Requirements
 
----
+- AMD Strix Halo / `gfx1151` with access to `/dev/kfd` and `/dev/dri`
+- A gfx1151-capable ROCm toolchain
+- Python 3 and a ROCm-enabled PyTorch build for the extension
+- A C++20-capable AMD Clang/HIP compiler and rocBLAS development files for the
+  standalone record harness
 
-## Performance Results
+Current performance work uses ROCm 7.14. The checked-in benchmark and
+profiling Dockerfiles are historical: they combine ROCm 7.9 Python packages
+with ROCm 6.3 APT tooling. They can reproduce the old development environment,
+but should not be described as a clean current stack or used to promote a new
+record.
 
-### Final Benchmarks (Adaptive Tile Selection with K-Unrolling)
+## Build the PyTorch extension
 
-| Configuration | WMMA TFLOPS | % Peak | rocBLAS FP16 | % of rocBLAS | Status |
-|---------------|-------------|--------|--------------|--------------|--------|
-| 512×512×512 | 12.5 | 21.0% | 20.6 | 60% | ✅ |
-| 1024×1024×1024 | 14.6 | 24.6% | 37.0 | 39% | ✅ |
-| 2048×2048×2048 | 20.0 | 33.7% | 38.5 | 52% | ✅ |
-| **4096×4096×4096** | **21.6** | **36.4%** | **41.0** | **53%** | ✅ |
-
-**rocBLAS achieves 69% of peak (41/59.4 TFLOPS) while our kernel achieves 36% of peak.**
-
-### Kernel Variant Comparison (4096×4096×2048)
-
-All 12 kernel variants pass correctness tests (< 1% relative error):
-
-| Kernel | Time (ms) | TFLOPS | % of Peak | Status |
-|--------|-----------|--------|-----------|--------|
-| **matmul_zerocopy** | 3.33 | **20.61** | 34.7% | ✅ Best |
-| **matmul_adaptive** | 3.35 | 20.52 | 34.5% | ✅ |
-| **matmul_asmOpt** | 3.35 | 20.49 | 34.5% | ✅ |
-| **matmul** | 3.36 | 20.46 | 34.4% | ✅ |
-| **matmul_native** | 3.45 | 19.92 | 33.5% | ✅ |
-| **matmul_kunroll** | 3.75 | 18.31 | 30.8% | ✅ |
-| **matmul_swizzled** | 3.84 | 17.90 | 30.1% | ✅ |
-| **matmul_noPrefetch** | 3.90 | 17.60 | 29.6% | ✅ |
-| **matmul_xor_optimized** | 3.98 | 17.26 | 29.1% | ✅ |
-| **matmul_quad** | 4.04 | 17.01 | 28.6% | ✅ |
-| **matmul_hilbert** | 5.16 | 13.33 | 22.4% | ✅ |
-| **matmul_highOcc** | 6.68 | 10.28 | 17.3% | ✅ |
-| **matmul_coop** | 3.44 | 19.98 | 33.6% | ✅ New |
-| **PyTorch (reference)** | 1.92 | 35.86 | 60.4% | — |
-
-**Peak Theoretical**: 59.4 TFLOPS (gfx1151 FP16 WMMA)
-
-#### Key Findings
-
-1. **matmul_zerocopy performs best** (20.61 TFLOPS, 57.5% of PyTorch)
-   - Swizzled B matrix with zero-copy stores
-   - Best for large matrices
-
-2. **Top 4 kernels are within 1%** of each other (~20.5 TFLOPS)
-   - zerocopy, adaptive, asmOpt, standard all perform similarly
-   - Use `matmul_adaptive` for automatic selection
-
-3. **XOR swizzle kernels now work correctly**
-   - `matmul_swizzled` and `matmul_xor_optimized` both pass
-   - Fixed fragment loading pattern (load ROW, not column)
-
-4. **HighOcc underperforms** (10.28 TFLOPS)
-   - Lower register pressure doesn't compensate for reduced compute intensity
-   - Not recommended for current workloads
-
-### Correctness Tests
-
-All correctness tests pass with acceptable FP16 precision:
-
-| Test | Relative Error | Status |
-|------|----------------|--------|
-| 512×512×64 | < 0.04% | ✅ |
-| 2048×2048×128 | < 0.03% | ✅ |
-| 4096×4096×2048 | < 0.03% | ✅ |
-| GEMM α=2.0, β=0.5 | < 0.001% | ✅ |
-| GEMM in-place | < 0.001% | ✅ |
-
----
-
-## Building
-
-### Using Docker (Recommended)
-
-The project includes a Docker environment with ROCm 7.10, PyTorch, and all dependencies pre-configured for gfx1151.
-
-**1. Build the Docker image:**
+On a host with ROCm and PyTorch already installed:
 
 ```bash
-cd /path/to/wmma_ops
-docker compose -f docker/docker-compose.benchmark.yml build
+export ROCM_PATH=/opt/rocm
+python3 -m pip install -e . --no-build-isolation
+python3 -c 'import wmma_ops; print(wmma_ops.__doc__)'
 ```
 
-**2. Run the build and test suite:**
+`setup.py` pins `PYTORCH_ROCM_ARCH=gfx1151`, invokes
+`$ROCM_PATH/bin/hipcc`, and saves compiler intermediates for ISA inspection.
+Record any non-default compiler flags with a performance result.
+
+### Historical Docker environment
 
 ```bash
-# Create .env file if it doesn't exist (required by docker-compose)
 touch .env
-
-# Build and test
+docker compose -f docker/docker-compose.benchmark.yml build
 docker compose -f docker/docker-compose.benchmark.yml run --rm benchmark \
-  bash -c "export LD_LIBRARY_PATH=/opt/venv/lib/python3.12/site-packages/torch/lib:\$LD_LIBRARY_PATH && \
-           cd /workspace/wmma_ops && ./build_and_test.sh"
+  bash -lc 'cd /workspace/wmma_ops && ./build_and_test.sh'
 ```
 
-**3. Interactive development:**
+The compose file requires `.env` because it was designed for model benchmarks
+as well as this extension. No Hugging Face token is needed for the WMMA tests.
 
-```bash
-# Start an interactive shell in the container
-docker compose -f docker/docker-compose.benchmark.yml run --rm benchmark bash
-
-# Inside the container:
-export LD_LIBRARY_PATH=/opt/venv/lib/python3.12/site-packages/torch/lib:$LD_LIBRARY_PATH
-cd /workspace/wmma_ops
-pip install -e . --no-build-isolation
-python test_rocwmma_patch.py
-```
-
-### Using pip (Host Installation)
-
-If you have ROCm and PyTorch installed on your host system:
-
-```bash
-cd /path/to/wmma_ops
-pip install -e . --no-build-isolation
-```
-
-### Build Requirements
-
-- **Toolkit**: ROCm 7.9 or 7.10-preview
-- **Compiler**: HIP compiler (`hipcc`)
-- **Python**: PyTorch with ROCm support
-- **Target**: gfx1151 (RDNA3.5 / Strix Halo)
-
----
-
-## Usage
-
-### Simple Matrix Multiply (C = A × B)
+## Quick use
 
 ```python
 import torch
 import wmma_ops
 
-# Create test tensors (FP16 input)
-A = torch.randn(4096, 2048, device='cuda', dtype=torch.float16)
-B = torch.randn(2048, 4096, device='cuda', dtype=torch.float16)
+a = torch.randn((4096, 4096), device="cuda", dtype=torch.float16)
+b = torch.randn((4096, 4096), device="cuda", dtype=torch.float16)
 
-# Use optimized WMMA matmul (FP32 output)
-C = wmma_ops.matmul(A, B)
+# All matmul variants return FP32.
+c = wmma_ops.matmul(a, b)
+reference = a.float() @ b.float()
 
-# Alternative: specify tile configuration
-C = wmma_ops.matmul_tiled(A, B, 1)  # 1 = 128×64 tile
-
-# Verify correctness
-C_ref = torch.matmul(A, B)
-print(f"Max error: {(C - C_ref).abs().max().item()}")
+max_abs = (c - reference).abs().max().item()
+normalized_max = max_abs / reference.abs().max().item()
+print(max_abs, normalized_max)
 ```
 
-### Available Functions
+Inputs must be two-dimensional FP16 tensors on the same GPU, with compatible
+inner dimensions. Wrappers make inputs contiguous. WMMA-specific variants may
+add alignment or K-multiple requirements and report them with `TORCH_CHECK`.
 
-#### Matrix Multiply Functions
+### Public extension bindings
 
-| Function | Description |
-|----------|-------------|
-| `wmma_ops.matmul(A, B)` | Standard optimized kernel (recommended) |
-| `wmma_ops.matmul_adaptive(A, B)` | Auto-selects optimal tile configuration |
-| `wmma_ops.matmul_tiled(A, B, config)` | Explicit tile configuration (0-3) |
-| `wmma_ops.matmul_kunroll(A, B)` | K-unrolled variant (2× fewer syncs) |
-| `wmma_ops.matmul_noPrefetch(A, B)` | Without register prefetch |
-| `wmma_ops.matmul_highOcc(A, B)` | High-occupancy variant |
-| `wmma_ops.matmul_quad(A, B)` | Quad-buffered variant |
-| `wmma_ops.matmul_native(A, B)` | gfx1151-specific with explicit intrinsics |
-| `wmma_ops.matmul_zerocopy(A, B)` | Swizzled B with zero-copy stores (fastest) |
-| `wmma_ops.matmul_asmOpt(A, B)` | Assembly-optimized scheduling hints |
-| `wmma_ops.matmul_hilbert(A, B)` | Hilbert curve tile mapping for L2 locality |
-| `wmma_ops.matmul_swizzled(A, B)` | XOR-swizzled LDS (bank conflict-free) |
-| `wmma_ops.matmul_xor_optimized(A, B)` | Optimized XOR swizzle variant |
-| `wmma_ops.matmul_coop(A, B)` | Cooperative loading (half threads load A, half load B) |
+The bindings fall into three groups. “Experimental” is intentional: a name is
+not a claim that the variant is faster than `matmul`.
 
-#### BLAS-Style GEMM (C = α × A × B + β × C)
+| Group | Bindings |
+|---|---|
+| Main paths | `matmul`, `matmul_adaptive`, `matmul_tiled` |
+| Historical/experimental schedules | `matmul_hilbert`, `matmul_kunroll`, `matmul_native`, `matmul_zerocopy`, `matmul_quad`, `matmul_highOcc`, `matmul_noPrefetch`, `matmul_asmOpt`, `matmul_swizzled`, `matmul_xor_optimized`, `matmul_coop`, `matmul_pingpong`, `matmul_opt` |
+| BLAS-style API | `gemm`, `gemm_inplace`, `gemm_adaptive` |
 
-| Function | Description |
-|----------|-------------|
-| `wmma_ops.gemm(A, B, alpha=1.0, beta=0.0, C=None)` | Standard GEMM with fused scaling |
-| `wmma_ops.gemm_adaptive(A, B, alpha=1.0, beta=0.0, C=None)` | Auto-tuned GEMM with scaling |
-| `wmma_ops.gemm_inplace(A, B, C, alpha=1.0, beta=0.0)` | In-place GEMM (modifies C directly) |
+The checked-in extension does **not** expose Flash Attention. Attention notes
+in this repository document a separate investigation, not a Python API.
 
-#### Flash Attention
+BLAS-style use:
 
-| Function | Description |
-|----------|-------------|
-| `wmma_ops.flash_attention(Q, K, V, causal=False, scale=-1.0)` | Flash Attention v2 forward pass |
-
-**Flash Attention Usage:**
 ```python
-import torch
-import wmma_ops
-
-# Input: Q, K, V tensors of shape [B, H, N, D]
-# B = batch size, H = num heads, N = sequence length, D = head dimension
-Q = torch.randn(2, 8, 512, 64, device="cuda", dtype=torch.float16)
-K = torch.randn(2, 8, 512, 64, device="cuda", dtype=torch.float16)
-V = torch.randn(2, 8, 512, 64, device="cuda", dtype=torch.float16)
-
-# Non-causal attention
-O = wmma_ops.flash_attention(Q, K, V)
-
-# Causal attention (for autoregressive models)
-O_causal = wmma_ops.flash_attention(Q, K, V, causal=True)
-
-# Custom scale (default: 1/sqrt(D))
-O_scaled = wmma_ops.flash_attention(Q, K, V, scale=0.1)
+c = wmma_ops.gemm(a, b, alpha=2.0)
+c_previous = torch.zeros_like(c)
+wmma_ops.gemm_inplace(a, b, c_previous, alpha=1.5, beta=0.3)
 ```
 
-**Current Status:**
-- ✅ Correctness: Matches PyTorch SDPA (<0.001 max error)
-- ⚠️ Performance: Simple scalar kernel, ~2-10x slower than PyTorch SDPA
-- 🔜 TODO: WMMA-accelerated tiled implementation for better performance
-
-**Usage Example (GEMM with scaling):**
-```python
-import wmma_ops
-
-# C = 2.0 * (A @ B) + 0.5 * C_prev
-C = wmma_ops.gemm(A, B, alpha=2.0, beta=0.5, C=C_prev)
-
-# In-place: C = 1.5 * (A @ B) + 0.3 * C (modifies C directly)
-wmma_ops.gemm_inplace(A, B, C, alpha=1.5, beta=0.3)
-```
-
-### Recommendations
-
-- **For Production Use**: Use `matmul_adaptive` - best overall performance
-- **For Specific Sizes**: 
-  - Small (512): Use `matmul` (Standard)
-  - Medium (1024): Use `matmul_adaptive` (selects K-Unroll)
-  - Large (2048+): Use `matmul_adaptive` (selects Standard 128×64)
-
----
-
-## Testing
-
-### Run Test Suite (Docker)
+## Test the extension
 
 ```bash
-# Full build + test
-docker compose -f docker/docker-compose.benchmark.yml run --rm benchmark \
-  bash -c "export LD_LIBRARY_PATH=/opt/venv/lib/python3.12/site-packages/torch/lib:\$LD_LIBRARY_PATH && \
-           cd /workspace/wmma_ops && ./build_and_test.sh"
-
-# Or run tests only (after building)
-docker compose -f docker/docker-compose.benchmark.yml run --rm benchmark \
-  bash -c "export LD_LIBRARY_PATH=/opt/venv/lib/python3.12/site-packages/torch/lib:\$LD_LIBRARY_PATH && \
-           cd /workspace/wmma_ops && python test_rocwmma_patch.py"
+./build_and_test.sh
+python3 test_rocwmma_patch.py
+python3 test_fragment_loading.py
 ```
 
-### Run Test Suite (Host)
+`test_rocwmma_patch.py` is the main historical correctness/performance suite,
+but its hard-coded variant list is not guaranteed to include every binding.
+Check the list before relying on it for a new kernel. Use
+`test_fragment_loading.py` whenever the gfx1151 register layout, LDS packing,
+or output-store mapping changes.
+
+Correctness for a record attempt means more than “the first few values look
+right.” Compare the complete FP32 output against an FP32 reference and retain:
+
+- finite/non-finite status;
+- maximum absolute error;
+- maximum error normalized by the maximum reference magnitude;
+- RMS error.
+
+The historical pass threshold is normalized maximum error below 1%.
+
+## Reproduce the standalone 41.322 TFLOPS candidate
+
+The standalone harness instantiates one schedule from the MIT-licensed
+`adelj88/rocm_wmma_gemm` project. The build script verifies both its pinned
+commit and the SHA-256 digest of its include tree.
 
 ```bash
-python test_rocwmma_patch.py
+git clone https://github.com/adelj88/rocm_wmma_gemm.git /tmp/rocm_wmma_gemm
+git -C /tmp/rocm_wmma_gemm checkout \
+  281b5dfd7fbff9cea80753bc55274a54f4a7c53a
+
+tools/build_rocwmma_record.sh /tmp/rocm_wmma_gemm \
+  build/rocwmma_record
+
+# warm-ups, iterations per block, A/B/C element offsets, allocation mode
+build/rocwmma_record 200 100 0 2048 0 combined-ab
 ```
 
-### Run Profiling
+The build fixes `gfx1151`, CU mode, `-O3`, fast math, and
+`-amdgpu-unroll-threshold-local=700`. The harness uses deterministic
+FP16-rounded inputs, five timing blocks, HIP event timing, a preallocated FP32
+output, and a separate rocBLAS FP32 reference. It exits zero only if correctness
+passes and the process median exceeds 41 TFLOPS.
+
+One successful process is not enough to promote a record. Run the executable
+from five fresh processes and report every process median and the total range.
+
+## Benchmark the Python bindings
+
+`benchmark_record.py` captures the environment, full-output correctness, raw
+timing blocks, candidate order, and summary statistics as JSON:
 
 ```bash
-python rocprof_wmma.py
+for run_id in 1 2 3 4 5; do
+  python3 benchmark_record.py \
+    --warmup 10 --iterations 100 --blocks 5 \
+    --run-id "$run_id" \
+    --output "runs/record-$run_id.json"
+done
 ```
 
-### Run Benchmarks
+The Python benchmark measures repeated extension calls, including the fresh
+output allocation performed by each wrapper. Do not compare it directly with
+the standalone harness without calling out that difference.
+
+For quick exploratory tuning:
 
 ```bash
-# Quick benchmark (no Optuna required)
-python autotune.py --quick
-
-# Full Optuna tuning (requires: pip install optuna)
-python autotune.py --trials 20
-
-# Tune specific size
-python autotune.py --size 4096 4096 2048
+python3 autotune.py --quick
+python3 autotune.py --size 4096 4096 4096
 ```
 
-### Benchmark Methodology
+## Measurement rules
 
-- **Hardware**: AMD gfx1151 (Strix Halo / RDNA3.5)
-- **Toolkit**: ROCm 7.9 or 7.10-preview
-- **Warmup**: 3 iterations
-- **Benchmark**: 20 iterations
-- **Correctness**: Compared against PyTorch FP32 matmul
-- **Tolerance**: < 1% relative error for correctness pass
+Performance claims in this repository follow these rules:
 
----
+1. Use 4096 x 4096 x 4096 unless the result is explicitly labeled with another
+   shape.
+2. State input, accumulation, and output types. FP16-output rocBLAS is not a
+   fair baseline for an FP32-output kernel.
+3. Validate before timing and validate the complete output.
+4. Keep counter collection out of timing runs; performance counters serialize
+   dispatches on this stack.
+5. Use at least ten warm-ups and 100 timed launches per block, five blocks per
+   process, and five fresh processes for promotion.
+6. Record the exact repository commit, compiler and ROCm versions, power/clock
+   policy, matrix allocation layout, generated ISA, VGPR/SGPR/LDS use, and
+   scratch use.
+7. Promote a result only when every process passes correctness and every
+   process median clears the active target.
 
-## Architecture Details
+See [the profiling guide](docs/PROFILING.md) for counter passes and ISA
+inspection, and [the performance ledger](docs/PERFORMANCE_STATUS.md#record-protocol)
+for the complete gate.
 
-### gfx1151 (RDNA3.5 / Strix Halo) Specifications
+## Verified gfx1151 facts
 
-| Component | Specification |
-|-----------|---------------|
-| **Wavefront Size** | 32 threads (Wave32) |
-| **SIMD Units per CU** | 2 × SIMD32 (dual-issue capable) |
-| **Compute Units** | 40 CUs |
-| **Peak Clock** | 2.9 GHz |
-| **Peak TFLOPS** | 59.4 (FP16 WMMA) |
-| **LDS** | 64 KB per CU |
-| **VGPR File** | 192 KB per SIMD (1.5× larger than mobile RDNA3) |
-| **Memory** | LPDDR5X (~256 GB/s) |
+- Wave size is 32 for this code.
+- `v_wmma_f32_16x16x16_f16` performs 8192 FLOPs in 32 execution cycles and is
+  rated at 1024 FLOP/WGP/cycle by AMD's Matrix Instruction Calculator.
+- A and B fragments carry 16 elements per lane, replicated between lanes
+  0-15 and 16-31.
+- FP32 C/D fragments carry eight elements per lane; the two 16-lane halves
+  hold alternating rows.
+- RDNA3.5 LDS is 64 DWORD banks arranged as two sets of 32. For a wave32
+  access, reason about `bank = (byte_address / 4) % 32`.
+- RDNA4/gfx12 uses a different WMMA fragment layout. Do not compile its
+  eight-elements-per-lane assumptions into gfx1151 code.
 
-### WMMA Instruction
+The authoritative mapping and citations live in
+[the fragment-layout guide](docs/wmma_fragment_layout_rdna3.md) and
+[the reference audit](docs/wmma_references.md).
 
-| Parameter | Value |
-|-----------|-------|
-| **Instruction** | `v_wmma_f32_16x16x16_f16` |
-| **Tile Size** | 16×16×16 (M×N×K) |
-| **Input Type** | FP16 (`half16`) |
-| **Accumulator Type** | FP32 (`float8`) |
-| **Wave Size** | 32 (w32 suffix) |
-| **Latency** | ~32 cycles |
+## Repository layout
 
-### WMMA Fragment Layout
-
-For detailed information on fragment layouts, see [docs/wmma_fragment_layout_rdna3.md](docs/wmma_fragment_layout_rdna3.md).
-
-**Key Points:**
-- **RDNA3 WMMA requires lane replication**: lanes 0-15 and lanes 16-31 must contain identical data for A and B fragments
-- **A Matrix**: Each lane loads one **ROW** of A (all 16 K values)
-- **B Matrix**: Transposed layout in LDS, each lane loads one **ROW** of transposed B (= one column of original B)
-- **C/D Matrix**: Row-major format, lanes 0-15 cover even rows, lanes 16-31 cover odd rows
-
----
-
-## Kernel Variants
-
-### 1. Standard Kernel (Optimal)
-
-**Configuration**: 128×64 tile, 4×2 warps, 2×2 register blocking
-
-**Features**:
-- Double buffering (overlaps loads with compute)
-- GMEM spreading (register prefetch interleaved with MMA)
-- Vectorized `half8` global loads
-- Transposed B in LDS for `col_major` fragment access
-- LDS padding (+8 halfs) to avoid bank conflicts
-
-**Performance**: 21.9 TFLOPS (36.8% peak) at 4096×4096
-
-### 2. Adaptive Kernel (Recommended)
-
-**Configuration**: Auto-selects optimal variant based on matrix dimensions
-
-**Selection Logic**:
-- Small matrices (< 512): Uses 64×64 tiles
-- Medium matrices (512-2048): Uses 128×64 tiles with K-unroll when beneficial
-- Large matrices (> 2048): Uses 128×64 standard tiles
-
-**Performance**: 21.6 TFLOPS (36.4% peak) at 4096×4096, best average across sizes
-
-### 3. K-Unroll Kernel
-
-**Configuration**: 128×64 tile with 2× K-unrolling
-
-**Features**:
-- Processes 2× BLOCK_K per iteration
-- Reduces `__syncthreads` overhead by 50%
-- Best for K dimensions in 768-1536 range
-
-**Performance**: 17.2 TFLOPS (29% peak) at 4096×4096, but 15.7 TFLOPS at 1024×1024
-
-### 4. No-Prefetch Kernel
-
-**Simplification**: Removes register prefetch phase
-
-**Trade-off**: Lower register pressure (~64 VGPRs) but less latency hiding
-
-**Performance**: 19.2 TFLOPS (32% peak) at 4096×4096
-
-### 5. High-Occupancy Kernel
-
-**Configuration**: 64×32 tile, 4×1 warps, 2×1 register blocking
-
-**Goal**: Maximize waves/CU by reducing VGPRs to ~50
-
-**Result**: Worse performance (9.8 TFLOPS) — latency hiding more important than occupancy for this compute-bound workload
-
-### 6. Native Kernel (gfx1151-specific)
-
-**Configuration**: 128×64 tile, explicit inline assembly fences
-
-**Features**:
-- `lds_fence()`, `vmem_fence()`, `full_fence()` via inline asm
-- Interleaved prefetch pattern (global loads between WMMA ops)
-- `__builtin_prefetch` for software prefetch
-- `amdgpu_waves_per_eu(4, 8)` occupancy hint
-
-**Result**: ~same as adaptive (~20 TFLOPS) — async copy hardware not exposed in HIP
-
----
-
-## Key Optimizations
-
-### ✅ Implemented & Verified
-
-| Optimization | Impact | Description |
-|--------------|--------|-------------|
-| **2×2 Register Blocking** | +80% | 4 WMMA tiles per warp (32×32 output) |
-| **Double Buffering** | +20% | Ping-pong LDS buffers |
-| **GMEM Spreading** | +15% | Prefetch into registers, interleaved with MMA |
-| **Vectorized `half8` Loads** | +25% | 128-bit global loads |
-| **128×64 Tile Shape** | +25% | Optimal A-matrix reuse |
-| **Transposed B in LDS** | Required | Matches `col_major` fragment layout |
-| **LDS Padding (+8 halfs)** | **+15-20%** | Eliminates bank conflicts (stride 24 vs 16) |
-| **Pointer Increment** | +2% | Reduces VALU pressure in main loop |
-| **amdgpu_waves_per_eu** | +2% | Compiler hint for occupancy targeting |
-| **Epilogue Fusion (α/β)** | Saves 1 pass | Fused `C = αAB + βC` avoids separate scaling kernel |
-
-### Low-Risk Perf Tweaks
-
-- **Explicit Wave32**: Force/confirm wave32 compilation for gfx11 targets and assert at runtime using `__AMDGCN_WAVEFRONT_SIZE == 32`.
-- **Compiler Hints**: Use `__restrict__` on A/B/C pointers and `__builtin_assume_aligned(ptr, 16)` on vectorized paths to encourage `global_load_b128` generation.
-- **Wide LDS Reads**: Convert LDS fragment loads from 16 scalar half loads into two `ds_read_b128` + pack. This reduces LGKM overhead and bank conflict probability.
-
-### ❌ Tested But Not Beneficial
-
-| Optimization | Result | Reason |
-|--------------|--------|--------|
-| BLOCK_K=32 | Slower | Added loop overhead outweighed benefits |
-| Odd LDS Stride (17, 33) | Slower | Forces scalar LDS access |
-| Pre-transpose B on Host | Slower | Host overhead > kernel savings |
-| Triple Buffering | Broken | Correctness issues with rotation |
-| Inline Assembly Scheduling | No Change | Compiler scheduling already optimal |
-| High-Occupancy Variant | Slower | Latency hiding > occupancy for this workload |
-
-> **Regime caveat**: the table above is measured on a compute-bound large GEMM
-> (36% of FP16 peak). On a memory-bound q=1 attention decode kernel at 88% of
-> achievable bandwidth, double buffering measures **-18%** and occupancy beats
-> latency hiding — LDS capacity gates resident blocks directly. See
-> [docs/decode_attention_gfx1151.md](docs/decode_attention_gfx1151.md).
-
----
-
-## Optimization Techniques
-
-### LDS Bank Conflict Elimination
-
-#### Current Approach: Padding
-
-The current implementation uses **LDS padding** to avoid bank conflicts:
-
-```cpp
-#define LDS_PAD 8
-constexpr int A_STRIDE = BLOCK_K + LDS_PAD;  // 16 + 8 = 24 halfs = 48 bytes
+```text
+wmma_gemm.hip                    PyTorch wrappers and extension bindings
+wmma_kernel_largetile.hpp        Experimental large-tile implementation
+wmma_kernel_variants.hpp         Historical kernel variants
+wmma_tile_selection.hpp          Adaptive tile heuristic
+wmma_device_helpers.hpp          Common gfx1151 helpers
+wmma_xor_swizzle.hpp             XOR-LDS experiments
+rocwmma_patch/                   gfx1151 fragment/intrinsic bridge
+benchmark_record.py              Machine-readable extension benchmark
+tools/rocwmma_record.hip         Standalone validated record harness
+tools/build_rocwmma_record.sh    Pinned standalone build
+test_*.py                        GPU correctness and integration checks
+docs/                            Current guides, references, and history
+examples/                        Vendored external examples and snapshots
+docker/                          Historical benchmark/profiling environments
 ```
 
-**Problems with padding:**
-1. **Wastes LDS memory**: 8 extra halfs per row = 16 bytes wasted per row
-   - For BLOCK_M=128 rows: 128 × 16 = 2KB wasted per buffer
-   - With double buffering: 4KB wasted total
-2. **Doesn't guarantee conflict-free access**: Padding only helps if all accesses are sequential
-3. **Breaks vectorized access alignment**: Stride of 24 halfs means rows aren't 128-bit aligned
-
-#### Alternative: XOR-Based LDS Swizzle
-
-XOR swizzle transforms memory indices so that bank conflicts are **mathematically impossible**:
-
-```
-Original index: (row, col)
-Swizzled index: (row, col XOR f(row))
-```
-
-Where `f(row)` is chosen such that threads accessing different rows but same logical column will hit different banks.
-
-**For BLOCK_K=16, KPACK=8:**
-- K_GROUPS = 16 / 8 = 2
-- Swizzle: `k_group_swizzled = k_group ^ (row & 1)`
-
-**Memory Savings:**
-- Padding approach: 18,432 bytes (with 2 buffers)
-- XOR Swizzle: 12,288 bytes
-- **Savings: 6,144 bytes (33%)**
-
-**Status**: ✅ Implemented and correct in `wmma_xor_swizzle.hpp`, but **slower than padding** (~15-20% slower).
-
-#### Performance Analysis: XOR Swizzle vs Padding
-
-| Approach | TFLOPS | LDS Usage | Bank Conflicts |
-|----------|--------|-----------|----------------|
-| **Padding (stride=24)** | 20-21 | 18.4 KB | Low (stride breaks alignment) |
-| **XOR Swizzle (stride=16)** | 17-18 | 12.3 KB | None (mathematically eliminated) |
-
-**Why XOR Swizzle is Slower:**
-
-1. **B matrix transpose stores**: Each scalar store requires computing `Swizzle::to_physical()` (division, modulo, XOR)
-2. **Flat 1D array indexing**: More VALU overhead than 2D array with padding
-3. **RDNA3 LDS bank conflict penalty**: May not be severe enough to justify swizzle computation overhead
-4. **Compiler optimization**: 2D arrays with padding are easier for the compiler to optimize
-
-**Recommendation**: Use **padding approach** for gfx1151. The 33% LDS savings from XOR swizzle doesn't compensate for the ~15-20% performance loss.
-
-#### Third Option: Fix the Lane Mapping
-
-Padding and swizzle both change where data *sits*. When several lanes cooperate
-on one long dot product, the conflict can instead come from where lanes *read*,
-and neither helps. Giving each lane a contiguous chunk (`d = lane*DPT + t`) puts
-consecutive lanes 64 B apart — an 8-way conflict. Striding by the number of
-cooperating lanes (`d = t*TPR + lane`) puts them on consecutive 4-byte words:
-conflict-free, and `half2` loads fall out for free.
-
-Measured **+22%** on the MLA decode kernel (675.7 -> 555.9 us at n_kv=8896,
-108 -> 131 GB/s), plus a further **+8.6%** from padding the tile row stride by
-**+32 halves** — not +8: two rows of 16 lanes each need a half-bank-count shift to
-separate. Together 675.7 -> 512.1 us and **142 GB/s = 96% of achievable
-bandwidth**. Note that vectorising while *keeping* the blocked mapping was
-slower than scalar — the conflict was the cost, not the scalar loads. Details in
-[docs/decode_attention_gfx1151.md](docs/decode_attention_gfx1151.md).
-
-#### Critical Implementation Fixes for XOR Swizzle
-
-When data is stored swizzled in LDS, fragment loading must account for the swizzle transformation. The following fixes are required:
-
-**Fix 1: Fragment Loading with XOR Swizzle Inversion**
-
-When loading fragments from swizzled LDS, you must invert the swizzle to get the correct data layout for WMMA:
-
-```cpp
-// INCORRECT: Direct access ignores swizzle
-int frag_col = lane % 16;
-for (int r = 0; r < 16; r++) {
-    a0[r] = A_lds[curr][SwzA::to_flat(warp_m_base + r, frag_col)];
-}
-
-// CORRECT: Invert XOR swizzle
-int frag_col_orig = lane % 16;  // Original column needed by WMMA
-
-for (int r = 0; r < 16; r++) {
-    int row = warp_m_base + r;
-    
-    // Invert XOR swizzle: find which swizzled column contains original column frag_col_orig
-    int k_group_orig = frag_col_orig / 8;
-    int k_local = frag_col_orig % 8;
-    int k_group_swz = k_group_orig ^ (row & SwzA::K_GROUPS_MASK);
-    int frag_col_swz = k_group_swz * 8 + k_local;
-    
-    a0[r] = *reinterpret_cast<const _Float16*>(&A_lds[curr][SwzA::to_flat(row, frag_col_swz)]);
-}
-```
-
-**For B matrix** (similar fix with transposed layout):
-```cpp
-int frag_row_orig = lane % 16;  // Original row in transposed B layout
-
-for (int kk = 0; kk < 16; kk++) {
-    int n = warp_n_base + frag_row_orig;
-    
-    // Invert XOR swizzle for B
-    int k_group_orig = kk / 8;
-    int k_local = kk % 8;
-    int k_group_swz = k_group_orig ^ (n & SwzB::K_GROUPS_MASK);
-    int k_swz = k_group_swz * 8 + k_local;
-    
-    b0[kk] = *reinterpret_cast<const _Float16*>(&B_lds[curr][SwzB::to_flat(n, k_swz)]);
-}
-```
-
-**Fix 2: Correct Epilogue Store Pattern**
-
-WMMA fragment layout stores elements in a specific pattern. Each element `c_frag[i]` stores to row `i*2 + (lane/16)`, column `lane%16`:
-
-```cpp
-// INCORRECT: Wrong fragment layout assumption
-int frag_row = lane % 16;
-int frag_col_off = (lane / 16) * 8;
-for (int e = 0; e < 8; e++) {
-    int local_c = frag_col_off + e;
-    C[gr0 * N + gc0] = c00[e];  // WRONG!
-}
-
-// CORRECT: Proper WMMA fragment layout
-int frag_col = lane % 16;           // Column is fixed per lane
-int frag_row_offset = lane / 16;    // 0 for lanes 0-15, 1 for lanes 16-31
-
-for (int i = 0; i < 8; i++) {
-    int frag_row = i * 2 + frag_row_offset;  // Rows: 0,2,4,...,14 or 1,3,5,...,15
-    
-    int gr0 = block_m + warp_m_base + frag_row;
-    int gc0 = block_n + warp_n_base + frag_col;
-    
-    if (gr0 < M && gc0 < N) C[gr0 * N + gc0] = c00[i];
-    
-    // For 2×2 register blocking, handle all 4 tiles:
-    int gc1 = gc0 + 16;  // Tile [0][1]
-    if (gr0 < M && gc1 < N) C[gr0 * N + gc1] = c01[i];
-    
-    int gr1 = gr0 + 16;  // Tile [1][0]
-    if (gr1 < M && gc0 < N) C[gr1 * N + gc0] = c10[i];
-    
-    if (gr1 < M && gc1 < N) C[gr1 * N + gc1] = c11[i];  // Tile [1][1]
-}
-```
-
-**Complete Helper Function Example:**
-
-```cpp
-template<typename SwzA>
-__device__ __forceinline__ void load_a_frag_swizzled(
-    half16& a_frag,
-    const __half* lds_base,
-    int warp_m_base,
-    int frag_col_orig
-) {
-    #pragma unroll
-    for (int r = 0; r < 16; r++) {
-        int row = warp_m_base + r;
-        
-        // Invert XOR swizzle
-        int k_group_orig = frag_col_orig / 8;
-        int k_local = frag_col_orig % 8;
-        int k_group_swz = k_group_orig ^ (row & SwzA::K_GROUPS_MASK);
-        int frag_col_swz = k_group_swz * 8 + k_local;
-        
-        a_frag[r] = *reinterpret_cast<const _Float16*>(&lds_base[SwzA::to_flat(row, frag_col_swz)]);
-    }
-}
-```
-
-**Alternative Approach**: If the swizzle unswizzling is too complex or has performance overhead, consider:
-1. Store data swizzled (for bank conflict avoidance during global→LDS load)
-2. Unswizzle during LDS→Fragment load into a temporary buffer
-3. Load fragments from unswizzled buffer
-
-This adds an extra LDS copy step but simplifies the fragment loading code.
-
-**Testing Recommendations:**
-1. Start with correctness: Test with small matrices (128×128) before performance
-2. Compare against reference: Use non-swizzled kernel as reference
-3. Verify swizzle math: Test XOR swizzle inversion logic separately
-4. Check fragment layout: Verify fragment loading matches expected WMMA layout (see `docs/wmma_fragment_layout_rdna3.md`)
-5. Profile bank conflicts: Use rocprof to verify XOR swizzle actually reduces conflicts
-
-### L2 Cache Tile Rasterization
-
-Simple row-major launch can cause L2 thrashing for large matrices. Column-major or chunked tile processing improves L2 cache locality.
-
-**Expected Impact**: 5-15% improvement for large matrices (4096×4096+)
-
-**Status**: Implemented in `wmma_optimizations.hpp` but not yet integrated into main kernels.
-
-### Split-K for Skinny Matrices
-
-Split-K assigns partial K-dimension slices to different work-groups, improving utilization for skinny matrices (small M or N, large K).
-
-**Example**: M=16, N=4096, K=4096
-- Without Split-K: Only 64 tiles → 60% utilization
-- With Split-K factor 4: 256 tiles → 90% utilization
-
-**Status**: Implemented in `wmma_optimizations.hpp` but not yet benchmarked.
-
-### Register Pressure Management
-
-**Current Register Usage**: Estimated ~91-92 VGPRs per thread (needs verification via `roc-obj-utils` or `rocprof`)
-
-**To verify actual VGPR usage**:
-```bash
-# Extract from compiled kernel
-roc-obj-utils --disassemble kernel.hsaco | grep -A 20 "COMPUTE_PGM_RSRC"
-# Look for .vgprsnum value
-```
-
-**Compiler Hints**:
-```cpp
-__launch_bounds__(256, 2)
-__attribute__((amdgpu_waves_per_eu(4, 8)))
-// Note: amdgpu_num_vgpr does NOT work with templates in HIP
-// Only amdgpu_waves_per_eu is supported with templates
-```
-
-**Important**: The `amdgpu_num_vgpr` attribute is **not supported with template kernels** in HIP. Use `amdgpu_waves_per_eu` to hint occupancy instead.
-
-### SMEM-to-Register Double Buffering
-
-Current kernel does **Global→LDS double buffering** but not **LDS→Register double buffering**. The problem is LDS loads and WMMA compute are serialized.
-
-**Potential Improvement**: 5-10% by overlapping LDS loads with computation.
-
-**Trade-off**: Doubles register usage for fragments (from ~128 to ~256 VGPRs), which may reduce occupancy.
-
----
-
-## Profiling and Analysis
-
-### Performance Characteristics
-
-| K Dimension | Regime | Limiting Factor |
-|-------------|--------|-----------------|
-| K < 256 | Memory-bound | LPDDR5X bandwidth |
-| K ≥ 512 | Compute-bound | WMMA throughput |
-
-### Bottleneck Analysis (Compute-Bound Regime)
-
-| Bottleneck | Contribution | Notes |
-|------------|--------------|-------|
-| `__syncthreads` overhead | ~20% | 128 barriers for K=2048 |
-| Occupancy (5 waves/CU) | ~15% | 91 VGPRs limits to 5 waves |
-| LDS bank conflicts (B scatter) | ~10% | Transpose pattern causes conflicts |
-| WMMA pipeline bubbles | ~10% | Data dependencies within wave |
-
-### Roofline Analysis
-
-| Metric | Value |
-|--------|-------|
-| **Peak Compute** | 59.4 TFLOPS |
-| **Peak Memory BW** | 256 GB/s |
-| **Ridge Point** | ~106 ops/byte |
-| **Our Intensity (K=2048)** | ~682 ops/byte |
-| **Regime** | Compute-bound ✅ |
-
-### ISA Analysis
-
-#### Generated Assembly Inspection
-
-| Component | Count | Status |
-|-----------|-------|--------|
-| **WMMA Instructions** | 4 | ✅ Correct (2×2 blocking) |
-| **Global Loads (`global_load_b128`)** | 4 | ✅ Vectorized |
-| **LDS Stores (`ds_store_b128`)** | 8 | ✅ Vectorized |
-| **Dual-Issue (`v_dual_*`)** | 6-21 | ✅ Active |
-| **Barriers (`s_waitcnt`)** | 10 | ⚠️ Necessary overhead |
-
-#### WMMA Instruction Pattern
-
-```assembly
-s_waitcnt lgkmcnt(0)                                          ; Wait for LDS
-v_wmma_f32_16x16x16_f16 v[1:8], v[57:64], v[49:56], v[1:8]    ; MMA 0
-v_wmma_f32_16x16x16_f16 v[9:16], v[57:64], v[41:48], v[9:16]  ; MMA 1
-v_wmma_f32_16x16x16_f16 v[17:24], v[33:40], v[49:56], v[17:24] ; MMA 2
-v_wmma_f32_16x16x16_f16 v[25:32], v[33:40], v[41:48], v[25:32] ; MMA 3
-```
-
-**Key Finding**: Compiler groups WMMAs together intentionally. Attempts to interleave with inline assembly did not improve performance — the hardware scheduler handles dual-issue at runtime.
-
-### Profiling Commands
-
-**Profile LDS bank conflicts:**
-```bash
-rocprof --stats -o profile.csv -i metrics.txt ./your_kernel
-
-# metrics.txt should include:
-# LDSBankConflict
-# LDSInstructions
-# LDSBankConflictCycles
-
-# View results
-cat profile.csv | grep -E "LDSBankConflict|LDSInstructions"
-```
-
-**Interpretation**:
-- `LDSBankConflict` / `LDSInstructions` = conflict rate (target: < 5%)
-- High conflict rate indicates need for swizzling/padding
-
----
-
-## Remaining Gap to rocBLAS
-
-Our kernel achieves **53% of rocBLAS performance** (~21.6 vs ~41 TFLOPS). The gap is due to:
-
-| Factor | Description |
-|--------|-------------|
-| **Hand-tuned Assembly** | rocBLAS uses offline-optimized ISA with perfect scheduling |
-| **Adaptive Tile Selection** | rocBLAS selects optimal tile per matrix dimension |
-| **Async Copy Hardware** | Uses hardware async LDS loads (not exposed in HIP) |
-| **Register Allocation** | Compiler-level register allocation vs manual tuning |
-| **Multi-kernel Fusion** | rocBLAS fuses alpha/beta scaling |
-
-### Architecture-Specific Optimizations Explored
-
-We attempted several gfx1151-specific optimizations without portability constraints:
-
-| Optimization | Result | Notes |
-|--------------|--------|-------|
-| **Async global-to-LDS** | ❌ Not available | `__builtin_amdgcn_global_load_lds` not exposed in ROCm 7.x for gfx1151 |
-| **Hardware prefetch** | ❌ Not available | `s_prefetch_data` instruction not supported on RDNA3.5 |
-| **Explicit waitcnt** | ⚖️ No improvement | `lds_fence()`, `vmem_fence()` via inline asm perform same as compiler-managed |
-| **Interleaved prefetch** | ⚖️ No improvement | WMMA ops (128 cycles) complete before global loads (400-800 cycles) |
-| **Software prefetch** | ⚖️ Minimal impact | `__builtin_prefetch` adds ~1% improvement |
-
-### Definitive Finding: No Async LDS Intrinsics for gfx1151
-
-Based on extensive research of AMD ROCm docs, LLVM AMDGPU backend, and GPUOpen resources (as of late 2025):
-
-- **No `__hip_ds_copy_async`** or similar hardware intrinsics exist for gfx1151
-- **`llvm.amdgcn.load.to.lds`** exists but is synchronous (lowers to `global_load_lds` + `s_waitcnt`)
-- **Async behavior** must be achieved through:
-  - HIP runtime APIs (`hipMemcpyAsync` with streams) - host-device only
-  - Manual overlap with `s_waitcnt vmcnt(x)` to allow in-flight loads - **already implemented**
-  - Queue-level async (separate compute/copy queues) - not applicable for LDS
-
-The only ISA pattern available for global-to-LDS:
-```asm
-buffer_load_dword v1, v0, s[sgpr0:sgpr3], ...  ; Global load
-s_waitcnt vmcnt(0)                              ; Wait for load
-ds_write_b32 v2, v1                             ; Write to LDS
-s_waitcnt lgkmcnt(0)                            ; Wait for LDS visibility
-```
-
-GFX12 has `s_wait_dscnt` but still no async. ASYNC LDS and tensor ops are **not covered by the memory model** implemented by the AMDGPU backend; waits aren't inserted automatically and must be emitted explicitly.
-
-### What Would Close the Gap
-
-1. **AMD exposing true async LDS intrinsics** - requires hardware/firmware changes, not just software
-2. **Write in AMDGCN assembly** directly with perfect scheduling (impractical, loses compiler optimizations)
-3. **Use rocBLAS/hipBLASLt** for production (recommended - these use internal AMD optimizations)
-
-### Expected Final Performance
-
-The theoretical maximum without vendor-level assembly optimization is approximately **55-60% of peak** (~33-36 TFLOPS). Current optimizations in progress (XOR swizzle, L2 rasterization) could potentially reach **40-45% of peak** (~24-27 TFLOPS).
-
----
-
-## Optimization Journey
-
-### Evolution of Performance
-
-| Version | TFLOPS | Change | Key Optimization |
-|---------|--------|--------|------------------|
-| Baseline | 5.4 | — | Basic WMMA implementation |
-| + Multi-column blocks | 6.2 | +15% | BLOCK_N=64 for B reuse |
-| + 2×2 Register Blocking | 9.7 | +56% | 4 accumulators per warp |
-| + Vectorized Loads | 11.5 | +19% | `half8` global loads |
-| + Double Buffering | 13.2 | +15% | Ping-pong LDS |
-| + 128×64 Tile Shape | 16.5 | +25% | Increased A reuse |
-| + GMEM Spreading | 17.4 | +5% | Register prefetch |
-| + LDS Padding | **20.9** | **+20%** | Bank conflict elimination |
-
-### Lessons Learned
-
-1. **Tile shape matters more than expected**: 128×64 (tall) significantly outperforms 64×64 (square) due to A-matrix reuse
-2. **Prefetching > Occupancy**: For compute-bound workloads, hiding latency via prefetch beats maximizing waves/CU
-3. **Vectorized access is critical**: LPDDR5X heavily penalizes scalar loads
-4. **Compiler scheduling is smart**: Inline assembly attempts didn't improve on LLVM's scheduling
-5. **LDS transpose is required**: `col_major` B fragments need transposed data
-6. **Odd strides hurt more than help**: Bank conflict avoidance via odd strides forces scalar access
-
-### Optimization Attempts (December 2025)
-
-Several optimizations from the development notes were attempted:
-
-| Optimization | Result | Notes |
-|-------------|--------|-------|
-| **Vectorized C Writes** | ❌ 0.72x slower | Extra 32KB LDS + sync overhead hurt more than coalescing helped |
-| **Cooperative Loading** | ⚖️ 1.01-1.06x | Marginal gains at small K, slight regression at large K |
-| **BLOCK_K=32 (K-unroll)** | ❌ 0.89-0.97x | Increased LDS/register pressure hurt occupancy |
-| **XOR Swizzle LDS** | ❌ 0.85x slower | Swizzle computation overhead > bank conflict savings |
-
-**Conclusion**: The standard kernel is already well-optimized with double-buffered LDS, interleaved prefetch, and LDS padding. Further gains likely require split-K parallelism or assembly-level tuning.
-
----
-
-## File Structure
-
-```
-wmma_ops/
-├── README.md                        # This file
-├── setup.py                         # Build configuration
-├── wmma_gemm.hip                    # Main kernel implementation & pybind
-├── wmma_kernels_optimized.hpp       # Optimized kernel variants (kunroll, quad, hilbert, etc.)
-├── wmma_tile_mapping.hpp            # Hilbert curve tile mapping for L2 locality
-├── wmma_xor_swizzle.hpp             # XOR swizzle, rasterization, Split-K
-├── wmma_tile_selection.hpp          # Adaptive tile configuration
-├── wmma_device_helpers.hpp          # Fragment loading helpers
-├── rocwmma_patch/
-│   └── rocwmma_gfx1151.hpp          # Custom rocWMMA patch header
-├── docs/
-│   └── WMMA_DEVELOPMENT_NOTES.md    # Consolidated development documentation
-├── examples/                        # Reference implementations from other projects
-├── autotune.py                      # Optuna-based auto-tuner
-├── test_rocwmma_patch.py            # Test suite
-├── benchmark_summary.py             # Benchmark utilities
-└── build_in_docker.sh               # Docker build script
-```
-
----
-
-## References
-
-> **See [docs/wmma_references.md](docs/wmma_references.md)** for the annotated
-> version: sources ranked by how much weight each can carry, with what each is
-> authoritative *for*. It flags the ones that are wrong or misleading on specific
-> points (the GPUOpen A-fragment prose; the ROCm "RDNA3.5 system optimization"
-> page, which contains no architecture), records the three independent
-> confirmations of the C/D output layout, and notes the RDNA3-vs-RDNA4 lane
-> mapping difference that transposes silently when code is ported.
-
-### Primary Resources
-
-1. **rocWMMA Documentation (ROCm)**
-   - [rocWMMA Docs](https://rocm.docs.amd.com/projects/rocWMMA/en/latest/index.html)
-   - [API Reference](https://rocm.docs.amd.com/projects/rocWMMA/en/latest/api-reference/api-reference-guide.html)
-
-2. **Deep Dive into Matrix Optimization on AMD GPUs** (Sébastien Vince)
-   - [Blog Post](https://seb-v.github.io/optimization/update/2025/01/20/Fast-GPU-Matrix-multiplication.html)
-   - Achievement: 49 TFLOPS on FP32 GEMM (60% faster than rocBLAS)
-
-3. **AMD RDNA™ 3.5 ISA Reference Guide**
-   - [AMD Documentation](https://docs.amd.com/v/u/en-US/rdna35_instruction_set_architecture)
-
-4. **LLVM AMDGPU Usage**
-   - [LLVM Documentation](https://llvm.org/docs/AMDGPUUsage.html)
-   - Code object metadata, register usage, ISA details
-
-5. **rocBLAS Documentation (ROCm)**
-   - [rocBLAS Docs](https://rocm.docs.amd.com/projects/rocBLAS/en/latest/index.html)
-
-### Implementation References
-
-- [llama.cpp PR #16827](https://github.com/ggml-org/llama.cpp/pull/16827) - Original optimizations
-- [rocWMMA Library](https://github.com/ROCm/rocWMMA) - AMD's rocWMMA library
-- [rocWMMA Samples](https://github.com/ROCm/rocWMMA/tree/develop/samples) - Reference kernels and usage patterns
-- [AMD Matrix Instruction Calculator](https://github.com/ROCm/amd_matrix_instruction_calculator) - WMMA layout verification
-
----
-
-## License
-
-Based on rocWMMA library (MIT License) and llama.cpp optimizations.
+## Development guidance
+
+- Treat `docs/PERFORMANCE_STATUS.md` as the current performance authority and
+  `docs/WMMA_DEVELOPMENT_NOTES.md` as a historical notebook.
+- Inspect generated code after changing a schedule. A plausible source-level
+  optimization can silently increase VGPRs, lose occupancy, or spill.
+- Keep architecture-specific fragment logic in the gfx1151 helper. RDNA4
+  examples are not drop-in references.
+- Add a new binding to the correctness and benchmark candidate lists in the
+  same change.
+- Preserve raw results for promoted claims; prose summaries alone are not
+  enough to reproduce them.
+
+## Origin and licensing
+
+The code builds on ideas from llama.cpp rocWMMA work, AMD rocWMMA/Composable
+Kernel sources, and Sébastien Vince's matrix-multiplication analysis. See
+[the annotated references](docs/wmma_references.md) for exact sources and what
+each one establishes.
+
+The repository currently has no top-level license file. Do not infer a license
+for the repository as a whole from the licenses of its upstream references.
+The external kernel instantiated by the standalone harness is MIT-licensed at
+its pinned upstream commit.

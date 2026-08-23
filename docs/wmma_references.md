@@ -6,6 +6,7 @@ specific points; those are flagged rather than omitted, because they keep being
 found.
 
 Context: gfx1151 (Strix Halo, RDNA3.5), wave32, `v_wmma_f32_16x16x16_f16`.
+Last reviewed: 2026-08-23.
 
 ---
 
@@ -28,6 +29,21 @@ layout diagrams, which exist nowhere in the text layer.
   second's A or B.
 - §12.1 LDS: *"64 banks of DWORD-wide RAMs ... sub-divided into two sets of
   32-banks each"*, *"DWORDs are placed in the banks serially"* → `bank = (addr/4) % 32`.
+
+**AMD GPUOpen machine-readable ISA** —
+<https://gpuopen.com/download/machine-readable-isa/latest/>. This is the
+authoritative XML companion to the prose ISA and should be preferred when an
+instruction name, opcode, operand width, or architecture difference needs to
+be checked mechanically. The 2026-08-04 archive contains a dedicated
+`amdgpu_isa_rdna3_5.xml`. Two details relevant to the current GEMM work:
+
+- RDNA3.5 exposes ordinary `DS_READ_B32/B64/B96/B128`, `DS_SWIZZLE_B32`, and
+  `DS_[B]PERMUTE_B32`; it does **not** list a hardware transpose-LDS read. A
+  Tensile kernel name containing `TLDS1` describes a generated LDS layout and
+  schedule, not a missing `DS_READ_*_TR_B16` instruction.
+- `V_PERMLANE16_B32` is an arbitrary gather within a 16-lane row, while
+  `V_PERMLANEX16_B32` gathers across the two 16-lane rows. These are the
+  authoritative primitives to consider for a register transpose on wave32.
 
 **AMD Matrix Instruction Calculator** — <https://github.com/ROCm/amd_matrix_instruction_calculator>
 Authoritative for element↔register mappings and instruction characteristics.
@@ -111,11 +127,39 @@ table. This has cost this repo two bug-fix commits.
 **rocWMMA** — <https://github.com/ROCm/rocWMMA> (now folded into `ROCm/rocm-libraries`).
 Supports gfx1151; minimum ROCm 6.4.
 
+**ROCm blog, "SPIR-V on ROCm: A Portable IR for AMD GPUs"** —
+<https://rocm.blogs.amd.com/software-tools-optimization/spir-v-rocm/README.html>.
+Relevant to distribution, not to the current throughput gap. The
+`amdgcnspirv` flow preserves AMDGCN builtins and inline assembly and defers
+optimization to the ordinary AMDGPU backend at first launch, so it can ship
+one kernel artifact that specializes across future `gfx` targets. AMD reports
+native-like steady-state performance, not a faster backend, with roughly
+70-100 ms first-kernel JIT at single-kernel scale and a per-process COMGR
+cache. This repository's fixed gfx1151 extension should retain AOT code unless
+a multi-architecture artifact justifies the cold-start cost; any future A/B
+must time JIT and steady-state separately and inspect the JIT-produced ISA.
+
 **ROCm "AMD RDNA3.5 system optimization"** —
-<https://rocm.docs.amd.com/en/latest/how-to/system-optimization/rdna3-5.html>
-Despite the title, **contains no architecture**: it is GTT/TTM/VRAM memory
-configuration and minimum kernel versions. Do not go here for CU counts, LDS
-geometry or occupancy guidance.
+<https://rocm.docs.amd.com/en/latest/reference/system-optimization/rdna3-5.html>.
+Despite the title, **contains no kernel-architecture tuning**: it documents
+GART/GTT/VRAM memory configuration and minimum Linux kernel versions. Its useful
+points for a benchmark harness are:
+
+- gfx115x APUs use one physical DRAM pool. A large BIOS carve-out does not buy
+  faster memory; AMD recommends a small reservation (for example 0.5 GiB) and
+  dynamic GTT-backed allocations for AI workloads.
+- `/sys/module/ttm/parameters/pages_limit` is a capacity limit in 4 KiB pages,
+  not a bandwidth or clock control. Raising it can make a model fit, but cannot
+  make a resident 4096-cubed GEMM execute faster.
+- gfx1151 requires KFD queue and memory-check fixes present in Ubuntu HWE
+  6.17.0-19.19~24.04.2, Ubuntu OEM 6.14.0-1018, or mainline 6.18.4 and later.
+
+The `otheru` audit on 2026-08-22 found kernel 7.1.3, a live TTM cap of
+32,505,856 pages (124 GiB), and a matching 124 GiB `rocminfo` global pool out of
+125.07 GiB physical RAM. Sysfs reported a 512 MiB VRAM carve-out, exactly AMD's
+recommended small-reservation example. Capacity was already maximized, so no
+memory-setting change or reboot was justified. Do not go to this page for CU
+counts, LDS geometry, occupancy guidance, or a route to higher WMMA TFLOPS.
 
 **ROCm blog, "Attention Decode on AMD MI450 — Gluon Kernel Optimization Guide"** —
 <https://rocm.blogs.amd.com/software-tools-optimization/gluon-attention-decode-mi450/README.html>

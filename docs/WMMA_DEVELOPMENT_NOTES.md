@@ -1,4 +1,21 @@
-# Code Organization Plan for wmma_gemm.hip
+# WMMA development notebook
+
+> **Historical notebook:** This append-only file accumulated plans and
+> measurements during several 2024-2025 sessions. It contains contradictory
+> intermediate conclusions, superseded filenames, old environment assumptions,
+> results from different matrix shapes, and hypotheses that were later
+> rejected. It is intentionally retained as experiment history. Use
+> [`PERFORMANCE_STATUS.md`](PERFORMANCE_STATUS.md) for the refreshed 2026-08-23
+> source state and [`README.md`](README.md) for the documentation map. The
+> current validated standalone peak is 41.322 TFLOPS; every “current status”
+> label below is local to its historical section and is not the active plan.
+
+The notebook begins with the original code-organization plan, then appends
+fragment-layout investigations, correctness results, optimization experiments,
+and performance summaries. Search by section title or date; it is not intended
+to be read as one internally consistent specification.
+
+# Code organization plan for `wmma_gemm.hip`
 
 This document outlines logical chunks of code that can be extracted into separate header files to improve maintainability and organization.
 
@@ -2995,4 +3012,3 @@ Renamed header files for clarity:
 **PyTorch/rocBLAS reference**: 37.4 TFLOPS (63% of peak)
 
 All 12 kernel variants pass correctness tests with ~0.026% relative error.
-
