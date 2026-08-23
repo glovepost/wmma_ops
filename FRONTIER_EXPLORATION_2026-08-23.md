@@ -349,6 +349,75 @@ Performance/power/balance-power/performance measured
 47.763/47.881/47.932/47.862 TFLOPS.  The 0.35% span is far smaller than the
 remaining 2.8% target gap; CPU package policy is not a promotion path.
 
+### Resident-fragment, cache-policy, and clause closure
+
+Reversing the retained fragment schedule did not remove its serial LDS cost.
+The B-resident form keeps all four B fragments live and streams two A
+fragments through the four output rows.  It passed the full reference tuple at
+135 VGPR, 22 SGPR, 18 KiB LDS, two blocks/16 waves per CU, and zero spills, but
+reached only 44.938 TFLOPS.  The extra live B state and A reload schedule cost
+more than the three B load/wait gaps they replace.
+
+Hand-edited cache-policy variants were also exact.  In a single bracket with
+48.263 and 47.933-TFLOPS controls, A-only DLC/GLC/SLC reached
+47.956/47.386/47.246, B-only DLC/GLC/SLC reached
+46.770/47.973/47.721, and SLC on both inputs reached 47.307 TFLOPS.  Default
+global-load caching remains the retained policy.
+
+Finally, the three-load clause, a split two-plus-one clause, and no clause all
+passed full validation.  Against 48.340 and 48.481-TFLOPS controls they reached
+48.387, 48.254, and 48.540 TFLOPS respectively.  The no-clause result is only
+0.12% above the closing control and is not distinguishable from same-pass
+noise.  Enabling the existing two-B-fragment source schedule produced
+byte-identical ROCm 7.14 device instructions to the control, so it was removed
+from the GPU queue rather than reported as an independent timing result.
+
+### Prefetch, handoff, and vector-epilogue closure
+
+The next experiments deliberately kept failed designs in the ledger because
+they identify which apparent profiler costs are actually recoverable.  Every
+timed candidate below passed the same full-reference tuple unless explicitly
+identified as an invalid intermediate result.
+
+| Candidate | TFLOPS | Same-pass control | Lesson |
+|---|---:|---:|---|
+| Direct B / shared A | 32.774 | 48.57 / 48.49 | Duplicate B traffic is not hidden by cache reuse |
+| Pair-local A handoff | 44.723 | 48.15 / 48.03 | LDS flag polling costs more than the removed barrier |
+| Cyclic pair-local A prefetch | 37.298 | 48.44 / 48.41 | More overlap compounds the software-handoff cost |
+| Early flat refill in dedicated VGPRs | 45.714 | 48.19 / 48.28 | Longer live ranges and front-loaded VMEM lose to late reuse |
+| Early vector/scalar MUBUF refill | 46.009 / 46.100 | 48.27 / 48.31 | Changing the address path does not rescue early-all prefetch |
+| No explicit VMEM wait | 48.179 | 48.32 / 48.15 | The extra source wait is not a material runtime stall |
+| Correct vector epilogue | 47.335 | 48.26 / 48.34 | Fewer stores do not repay the transpose instructions |
+
+The pair-local handoff retained two blocks/16 waves, but used 142 VGPR and
+24,608 bytes of LDS.  It replaced one workgroup barrier with native LDS flag
+stores, scalarized polling, and peer-to-peer publication.  Its exactness proves
+the protocol, while its 7% regression shows that gfx1151's hardware barrier is
+cheaper than this software producer/consumer mechanism.  The early flat form
+used 130 VGPR and was 5.2% slower; moving vector or scalar MUBUF refills before
+the full 16-WMMA cluster produced similar regressions.  The compiler's late
+destination-register reuse is more valuable than maximum nominal load lead.
+
+The first vector-epilogue implementation failed correctness because it treated
+DPP `bank_mask` bits as lane-id bits.  On RDNA 3.5 they enable four-lane bank
+groups.  The corrected 8x8 transpose uses full-bank `row_xmask` operations plus
+lane selection for bits 0 and 1, and 0xa/0x5 bank masks only for bit 2.  It
+restored the exact reference tuple, then measured 1.96% below the control
+midpoint.  The invalid 47.382-TFLOPS output is not a performance result; the
+failure established the ISA rule, and the corrected run closed the epilogue as
+a route to 50 TFLOPS.
+
+Scalar-offset MUBUF recurrence is the only repeatable positive signal in this
+set.  The short bracket reached 48.692 TFLOPS against 48.516/48.544 controls.
+Four longer interleaved runs averaged 47.786 TFLOPS versus 47.613 for their
+controls, a smaller but consistent **0.36%** uplift.  It stays at 118 VGPR,
+22 SGPR, 18 KiB LDS, two blocks/16 waves, and zero spills.  Removing its clause
+fell from 48.500 to 48.340 TFLOPS in one bracket.  Moving its SALU recurrence
+after the final WMMA group was neutral at 48.298 versus 48.300, while advancing
+only the B refill by four/eight WMMA slots reached 48.203/48.386 versus 48.435.
+The retained lesson is narrow: scalar address recurrence helps slightly, but a
+compact late refill and its clause are more important than extra latency lead.
+
 These results leave the 48.614-TFLOPS p8 single-buffer kernel as the retained
 FP16-output leader.  Its 49.573-TFLOPS short maximum and isolated 50+ samples
 remain non-promotable; no sustained 50-TFLOPS result has been recorded.

@@ -3188,6 +3188,44 @@ bracket changed the p8 leader by only 0.35% with the GPU fixed at 2.9 GHz.
 The retained result is therefore still 48.614 TFLOPS sustained under the
 block/K16-prepacked FP16-output contract; the 50-TFLOPS gate is not met.
 
+The follow-on resident-fragment and instruction-policy checks also closed
+without a promotion.  Keeping all four B fragments resident while streaming A
+used 135 VGPR and remained exact, but reached 44.938 TFLOPS.  A/DLC,
+A/GLC, A/SLC, B/DLC, B/GLC, B/SLC, and both/SLC cache-policy variants reached
+47.956, 47.386, 47.246, 46.770, 47.973, 47.721, and 47.307 TFLOPS inside a
+48.263/47.933 control bracket.  Default caching remains best.
+
+Grouping all three refill loads in one clause reached 48.387 TFLOPS, splitting
+them two-plus-one reached 48.254, and removing the clause reached 48.540,
+against 48.340 and 48.481 controls.  All were exact; the largest delta was
+0.12% over the closing control and is noise, not a new schedule.  The existing
+two-B-fragment source option emitted byte-identical device ISA to the control
+under the pinned ROCm 7.14 compiler, so it does not define another candidate.
+
+The subsequent prefetch/handoff campaign turned several failures into useful
+boundaries.  Direct B with shared A reached 32.774 TFLOPS.  A correct pair-local
+A handoff replaced one hardware barrier with LDS flags and scalar polling, but
+reached only 44.723 TFLOPS at 142 VGPR and 24,608 bytes LDS; its cyclic-prefetch
+form fell to 37.298.  Front-loading all next-tile loads into dedicated VGPRs
+reached 45.714 TFLOPS with flat loads and 46.009/46.100 with vector/scalar
+MUBUF.  These results show that late register reuse and compact issue placement
+are worth more than nominal prefetch distance on this kernel.
+
+The vector epilogue also supplied an ISA correction.  RDNA 3.5 DPP
+`bank_mask` selects four-lane groups, not lane-id bits.  The initial transpose
+was therefore invalid.  A corrected full-bank DPP plus lane-select network
+passed the exact reference tuple at 47.335 TFLOPS versus 48.255/48.341 controls;
+the epilogue is not the missing throughput.  Removing the explicit source
+VMEM wait was neutral at 48.179 versus 48.325/48.151 controls.
+
+Scalar-offset MUBUF recurrence remains a small research building block, not a
+promotion.  A short pass reached 48.692 TFLOPS, while four longer interleaved
+runs averaged 47.786 versus 47.613 TFLOPS controls, a reproducible 0.36% gain.
+It preserves 118 VGPR, 22 SGPR, 18 KiB LDS, two blocks/16 waves, and zero
+spills.  Clause removal, late SALU recurrence, and advancing only B by four or
+eight WMMA slots did not improve it.  Failures here distinguish a visible
+stall counter from work that can actually be moved profitably.
+
 ### Shared-box validation discipline
 
 Every model-loading or GPU profiling command must acquire `/root/gpu.lock`.

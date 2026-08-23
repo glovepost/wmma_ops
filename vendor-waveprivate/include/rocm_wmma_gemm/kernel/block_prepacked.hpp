@@ -85,6 +85,9 @@ namespace rocm_wmma_gemm
 #ifndef WMMA_BP_SET_PRIO
 #define WMMA_BP_SET_PRIO 0
 #endif
+#ifndef WMMA_BP_VECTOR_EPILOGUE
+#define WMMA_BP_VECTOR_EPILOGUE 0
+#endif
 
 struct block_prepacked_gemm
 {
@@ -1050,12 +1053,132 @@ struct block_prepacked_gemm
             }
         }
 
+#if WMMA_BP_VECTOR_EPILOGUE
+        auto store_vector_tile = [&]<bool opsel>(
+                                     fragment<half, wmma_tile>& frag,
+                                     int tile_row,
+                                     int tile_col)
+        {
+            static_assert(WMMA_BP_PACK_N,
+                          "vector epilogue expects N-packed accumulators");
+            uint32_t value[8];
+            #pragma unroll
+            for(int i = 0; i < 8; ++i)
+            {
+                value[i] = static_cast<uint32_t>(__half_as_ushort(
+                    frag.get()[2 * i + (opsel ? 1 : 0)]));
+            }
+
+            auto dpp_xor = []<int mask, int bank_mask>(uint32_t keep,
+                                                        uint32_t peer)
+            {
+                // RDNA 3.5 bank_mask selects four-lane groups, not individual
+                // lane-id bits.  Bits 0/1 therefore require a full-bank DPP
+                // followed by lane selection; bit 2 maps to bank groups and
+                // can select directly with 0xa/0x5.
+                uint32_t result = keep;
+                if constexpr(mask == 1 && bank_mask == 0xf)
+                    asm volatile(
+                        "v_mov_b32_dpp %0, %1 row_xmask:1 row_mask:0xf bank_mask:0xf bound_ctrl:0"
+                        : "+v"(result)
+                        : "v"(peer));
+                else if constexpr(mask == 2 && bank_mask == 0xf)
+                    asm volatile(
+                        "v_mov_b32_dpp %0, %1 row_xmask:2 row_mask:0xf bank_mask:0xf bound_ctrl:0"
+                        : "+v"(result)
+                        : "v"(peer));
+                else if constexpr(mask == 4 && bank_mask == 0xa)
+                    asm volatile(
+                        "v_mov_b32_dpp %0, %1 row_xmask:4 row_mask:0xf bank_mask:0xa bound_ctrl:0"
+                        : "+v"(result)
+                        : "v"(peer));
+                else
+                {
+                    static_assert(mask == 4 && bank_mask == 0x5);
+                    asm volatile(
+                        "v_mov_b32_dpp %0, %1 row_xmask:4 row_mask:0xf bank_mask:0x5 bound_ctrl:0"
+                        : "+v"(result)
+                        : "v"(peer));
+                }
+                return result;
+            };
+
+            const bool lane_bit_0 = (lane & 1) != 0;
+            #pragma unroll
+            for(int pair = 0; pair < 4; ++pair)
+            {
+                const int low = 2 * pair;
+                const uint32_t a = value[low];
+                const uint32_t b = value[low + 1];
+                const uint32_t peer_b
+                    = dpp_xor.template operator()<1, 0xf>(b, b);
+                const uint32_t peer_a
+                    = dpp_xor.template operator()<1, 0xf>(a, a);
+                value[low] = lane_bit_0 ? peer_b : a;
+                value[low + 1] = lane_bit_0 ? b : peer_a;
+            }
+            const bool lane_bit_1 = (lane & 2) != 0;
+            #pragma unroll
+            for(int group = 0; group < 2; ++group)
+            {
+                #pragma unroll
+                for(int inner = 0; inner < 2; ++inner)
+                {
+                    const int low = group * 4 + inner;
+                    const uint32_t a = value[low];
+                    const uint32_t b = value[low + 2];
+                    const uint32_t peer_b
+                        = dpp_xor.template operator()<2, 0xf>(b, b);
+                    const uint32_t peer_a
+                        = dpp_xor.template operator()<2, 0xf>(a, a);
+                    value[low] = lane_bit_1 ? peer_b : a;
+                    value[low + 2] = lane_bit_1 ? b : peer_a;
+                }
+            }
+
+            #pragma unroll
+            for(int i = 0; i < 4; ++i)
+            {
+                const uint32_t low = value[i];
+                const uint32_t high = value[i + 4];
+                value[i]
+                    = dpp_xor.template operator()<4, 0xa>(low, high);
+                value[i + 4]
+                    = dpp_xor.template operator()<4, 0x5>(high, low);
+            }
+
+            u16x8 packed;
+            #pragma unroll
+            for(int i = 0; i < 8; ++i)
+                packed[i] = static_cast<uint16_t>(value[i]);
+
+            const int output_row
+                = tile_row + 2 * (lane & 7) + (lane >> 4);
+            const int output_col = tile_col + 8 * ((lane >> 3) & 1);
+            *reinterpret_cast<u16x8*>(
+                C + static_cast<size_t>(output_row) * N + output_col)
+                = packed;
+        };
+#endif
+
         #pragma unroll
         for(int wm = 0; wm < warp_tile_m; ++wm)
         {
             #pragma unroll
             for(int wn = 0; wn < 4; ++wn)
             {
+#if WMMA_BP_VECTOR_EPILOGUE
+                if(wn < 2)
+                    store_vector_tile.template operator()<false>(
+                        c_n[wm][wn],
+                        block_row + warp_m_base + wm * wmma_tile,
+                        block_col + warp_n_base + wn * wmma_tile);
+                else
+                    store_vector_tile.template operator()<true>(
+                        c_n[wm][wn - 2],
+                        block_row + warp_m_base + wm * wmma_tile,
+                        block_col + warp_n_base + wn * wmma_tile);
+#else
                 if constexpr(!WMMA_BP_PACK_N)
                 {
                     if(wm < 2)
@@ -1094,6 +1217,7 @@ struct block_prepacked_gemm
                             M,
                             N);
                 }
+#endif
             }
         }
     }

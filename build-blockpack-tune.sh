@@ -32,6 +32,8 @@ hipcc "${common[@]}" -DWMMA_BP_SPLIT_BARRIER=1 \
     rocwmma_half_record.hip -lrocblas -o bp-split-barrier
 hipcc "${common[@]}" -DWMMA_BP_WAIT_AFTER_BARRIER=1 \
     rocwmma_half_record.hip -lrocblas -o bp-wait-after-barrier
+hipcc "${common[@]}" -DWMMA_BP_NO_EXPLICIT_VMWAIT=1 \
+    rocwmma_half_record.hip -lrocblas -o bp-no-explicit-vmwait
 hipcc "${common[@]}" -DWMMA_BP_SET_PRIO=1 \
     rocwmma_half_record.hip -lrocblas -o bp-setprio
 

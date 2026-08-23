@@ -279,6 +279,21 @@ it reached 35.850 TFLOPS.  Lowering CPU energy preference while keeping the
 GPU at 2.9 GHz changed the p8 leader by only about 0.35%, so package policy is
 not the missing 2.8%.
 
+Later producer/consumer, prefetch, and epilogue experiments also preserved the
+48.614-TFLOPS leader.  Pair-local LDS flag handoff was exact but reached 44.723
+TFLOPS; front-loading a complete refill reached 45.714--46.100 TFLOPS; and a
+corrected DPP vector epilogue reached 47.335 TFLOPS.  The epilogue correction
+matters independently of speed: RDNA 3.5 DPP `bank_mask` selects four-lane
+groups, so it cannot directly select lane-id bits 0 and 1.  The earlier output
+from that mistaken assumption was invalid and is not a timing result.
+
+Replacing flat-address recurrence with scalar-offset MUBUF is the one small
+positive signal.  Four longer interleaved runs averaged 47.786 TFLOPS versus
+47.613 for the controls (+0.36%) with unchanged 118-VGPR, two-block occupancy.
+Clause removal, SALU reordering, and advancing only the B refill did not improve
+it.  This is retained as a code-generation building block, not promoted as a
+new record: it remains within normal run-to-run variation and below 50 TFLOPS.
+
 At 256 GB/s, the corresponding compute-to-memory ridge point is about
 232 FLOP/byte (`59.4e12 / 256e9`), not 106 FLOP/byte. Both inputs should be
 replaced by observed clocks and sustained bandwidth when making a measured
