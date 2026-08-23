@@ -30,6 +30,43 @@ directly with the record:
 - 21.9 TFLOPS for the standard kernel appeared without a raw result or complete
   run description. Treat it as an observation, not a replacement record.
 
+### 2026-08-23 upstream FP16-output comparison
+
+The current upstream
+[`adelj88/rocm_wmma_gemm`](https://github.com/adelj88/rocm_wmma_gemm) benchmark
+was also reproduced on the shared gfx1151 host. Commit
+`281b5dfd7fbff9cea80753bc55274a54f4a7c53a` was built for `gfx1151` with ROCm
+7.14 and `/opt/rocm/bin/amdclang++`. Each timing run used the upstream default
+Google Benchmark protocol, without profiler counters:
+
+```bash
+./benchmark/bench_half_half --shapes 4096
+```
+
+For the published 4096 x 4096 x 4096 layout with A column-major, B row-major,
+and C row-major, three fresh benchmark processes reported:
+
+| Process | Average TFLOPS | Reported time | Minimum time | Maximum time |
+|---:|---:|---:|---:|---:|
+| 1 | 45.8997 | 2.99 ms | 2.94046 ms | 3.06502 ms |
+| 2 | 46.0820 | 2.98 ms | 2.94812 ms | 3.02114 ms |
+| 3 | 46.2115 | 2.97 ms | 2.92912 ms | 3.09592 ms |
+
+The median is **46.082 TFLOPS**, with a 45.900-46.212 TFLOPS range. That is
+7.37% above the upstream
+[published 42.92 TFLOPS result](https://github.com/adelj88/rocm_wmma_gemm/blob/main/docs/gfx1151_square.md)
+for the same shape, layout, and `bench_half_half` contract. The entire
+eight-layout benchmark was run in each process so the selected row retained the
+published invocation's ordering and warm state.
+
+All 208 upstream same-precision correctness tests passed across FP16, BF16, and
+all eight layout combinations. Those tests cover several shapes through
+1024 x 256 x 256, but they do not compare the full 4096-cubed result against a
+reference. The benchmark itself times the kernel without checking its output.
+Accordingly, 46.082 TFLOPS is a reproduced external FP16-input/FP16-output
+comparison, not a promoted `wmma-ops` record and not an apples-to-apples
+replacement for the FP16-input/FP32-accumulation/output result above.
+
 ### 2026-08-22 ROCm 7.14 sweep
 
 The active gfx1151 sweep has superseded 21.6 TFLOPS as an engineering

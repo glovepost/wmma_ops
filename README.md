@@ -1,8 +1,9 @@
 # wmma-ops
 
-Experimental FP16-input, FP32-accumulation WMMA GEMM kernels for AMD Strix
-Halo (`gfx1151`), exposed as a PyTorch extension and accompanied by standalone
-HIP benchmarks.
+Optimized FP16-input, FP32-accumulation WMMA GEMM kernels for AMD Strix Halo
+(`gfx1151`), exposed as a PyTorch extension and accompanied by standalone HIP
+benchmarks. The current validated 4096-cubed standalone peak is **41.322
+TFLOPS**.
 
 The project is a performance laboratory, not a drop-in replacement for
 rocBLAS. Its useful outputs are the gfx1151 fragment helpers, a collection of
@@ -27,8 +28,19 @@ package-power window, not finding a one-off peak.
 |---|---|---|---|
 | **41.322 TFLOPS** | 4096 cubed | FP16 inputs, FP32 accumulate/output | Validated standalone peak |
 | **40.900 TFLOPS median** | 4096 cubed | Same | Five fresh processes; strict gate not met |
+| **46.082 TFLOPS median** | 4096 cubed | FP16 inputs/output | Upstream `bench_half_half`; separate numerical contract |
 | 21.6 TFLOPS | 4096 cubed | FP16 inputs, FP32 output | Historical PyTorch-extension result |
 | about 41 TFLOPS | 4096 cubed | FP16 inputs/output | Historical `torch.mm` comparison; different contract |
+
+The FP16-output comparison was reproduced from current
+[`adelj88/rocm_wmma_gemm`](https://github.com/adelj88/rocm_wmma_gemm) commit
+`281b5df` with ROCm 7.14. The exact published layout (A column-major, B
+row-major, C row-major) measured 45.900, 46.082, and 46.212 TFLOPS in three
+fresh processes, a 46.082 TFLOPS median and a 6.9-7.7% improvement over the
+upstream 42.92 TFLOPS table entry. All 208 upstream same-precision tests passed.
+This does not replace the project record: the output type differs, and the
+upstream suite does not validate every output at the exact 4096-cubed benchmark
+shape. See the performance ledger for the full command and timing distribution.
 
 The clock-derived nominal ceiling is 59.4 TFLOPS: 20 WGPs x 1024
 FLOP/WGP/cycle x 2.9 GHz. It is not a measured sustained ceiling.
