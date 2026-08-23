@@ -244,11 +244,14 @@ minimal dedicated kernel reduced that to 151 VGPR.  ISA inspection showed LLVM
 had hoisted all four B LDS fragments, extending 24 unnecessary VGPRs.  The
 hand-scheduled form reuses one eight-register B fragment, assembles at exactly
 128 VGPR with zero spills and 30,720 bytes of LDS.  Its first exclusive screen
-failed the full-reference gate: normalized maximum error 1.548774126, RMS
-error 7.342748277, and cosine similarity 0.052115086.  The associated timing
-sample was 32.046 TFLOPS, but timing is not comparable for a rejected result.
-The hand schedule must be debugged against the correct C++ implementation
-before any further performance screen.
+failed because B fragments were loaded after refill stores had started
+overwriting the consumed slot.  Moving those loads ahead of the stores
+restored the exact full-reference tuple.  Interleaving refill VMEM between the
+four B groups improved the correct form from 36.159 to 41.988 TFLOPS sustained
+(43.667 TFLOPS short), still behind a same-pass 47.767 TFLOPS p8 control.
+Holding two B fragments while recomputing addresses retained the 128-VGPR
+allocation but regressed to 39.921 TFLOPS sustained.  The corrected ring is
+therefore retained as a negative architecture result, not a candidate.
 
 ### Post-sweep research queue
 
@@ -300,10 +303,51 @@ LDS; the final ISA contains exactly one priority-1/priority-0 pair around each
 The 2026 FIBER paper (arXiv 2608.19628) reinforces that static private-register
 allocation is the fundamental obstacle to producer/consumer specialization,
 but its solution requires new shared-register hardware and ISA support.  It
-does not supply an implementable gfx1151 path.  With the hand K32 candidate
-rejected by validation, the queued GPU order is now: screen 5x8 mapping modes
-5/6 against a same-pass p8 control, then screen `s_setprio`.  Only a correct
-same-pass improvement advances to the sustained fresh-process promotion gate.
+does not supply an implementable gfx1151 path.
+
+Both queued cache mappings passed full-reference validation but regressed:
+plain 5x8 reached 46.640 TFLOPS and cyclic-skewed 5x8 reached 45.985 TFLOPS,
+against 47.793 TFLOPS in the same control pass.  `s_setprio` was worse at
+42.439 versus 47.937 TFLOPS.  Moving the LDS wait from before to immediately
+after `s_barrier` was neutral at 47.789 versus 47.889 TFLOPS.  Split
+`s_barrier_signal`/`s_barrier_wait` forms cannot be assembled for gfx1151;
+LLVM reports both instructions unsupported.
+
+One further barrier-removal architecture made each wave's 64x16 A tile private
+and ping-ponged only the shared B tile.  It fits exactly 32 KiB LDS and compiles
+at 123 VGPR with no spills, preserving two blocks/16 waves per CU.  The price
+is duplicate A traffic for the two N waves in each row band.  It passed the
+exact full-reference gate but reached only 37.707 TFLOPS, showing that traffic
+and private-tile addressing cost substantially more than the removed barrier.
+
+### IU4 instruction qualification
+
+The RDNA3.5 ISA and AMD Matrix Instruction Calculator identify
+`v_wmma_i32_16x16x16_iu4` as a distinct signed-or-unsigned INT4 matrix
+instruction: two packed operand VGPRs per lane, eight I32 accumulator VGPRs,
+8192 integer operations in 16 cycles, and a nominal 2048 operations/WGP/cycle.
+The `NEG[0:1]` fields select A/B signedness; wave32 repeats A and B across its
+two 16-lane halves.  The result mapping puts even rows in lanes 0-15 and odd
+rows in lanes 16-31.
+
+`tools/bench_wmma_iu4.hip` now checks that mapping against a nonuniform exact
+16x16 signed product and separately measures independent accumulator chains.
+All mapping and all-ones arithmetic checks pass.  The chain sweep measured
+103.040, 98.107, 108.380, 109.408, 109.718, and **110.229 INT4 TOPS** for
+1, 2, 4, 8, 12, and 16 chains respectively.  The best result is 92.8% of the
+118.8-TOPS clock-derived gfx1151 ceiling.
+
+This does not solve the FP16 record by substituting the unit.  The instruction
+accepts linear signed/unsigned four-bit integers, while ROCmFP4 Codebook10 uses
+the nonlinear levels `0, +/-1, +/-2, +/-3, +/-4, +/-6, +/-8, +/-10`; its
+positive 8/10 and negative 10 are outside one signed nibble.  An exact direct
+sum-of-linear-IU4 representation therefore needs at least two weight-side IU4
+products; a one-WMMA form would still need nonlinear correction work outside
+WMMA.  The two-product route leaves a best-case measured equivalent rate near
+55 TOPS before activation quantization, scale application, memory traffic, and
+output conversion.  The credible IU4 route is a separately quality-gated
+linear W4A4 format, not a bitwise reuse of the current ROCmFP4 weights and not
+a TFLOPS claim.
 
 ## Decision
 

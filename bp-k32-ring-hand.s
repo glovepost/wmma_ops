@@ -358,34 +358,6 @@ _ZN14rocm_wmma_gemm18block_k2_ring_gemm3runEP6__halfPKS1_S4_iii: ; @_ZN14rocm_wm
 	s_mov_b32 s15, 0
 	s_branch .LBB0_14
 .LBB0_13:                               ;   in Loop: Header=BB0_14 Depth=1
-	ds_load_b128 v[97:100], v127
-	ds_load_b128 v[101:104], v127 offset:16
-	s_waitcnt lgkmcnt(0)
-	v_wmma_f16_16x16x16_f16 v[57:64], v[89:96], v[97:104], v[57:64]
-	v_wmma_f16_16x16x16_f16 v[41:48], v[81:88], v[97:104], v[41:48]
-	v_wmma_f16_16x16x16_f16 v[25:32], v[73:80], v[97:104], v[25:32]
-	v_wmma_f16_16x16x16_f16 v[9:16], v[65:72], v[97:104], v[9:16]
-	ds_load_b128 v[97:100], v127 offset:1280
-	ds_load_b128 v[101:104], v127 offset:1296
-	s_waitcnt lgkmcnt(0)
-	v_wmma_f16_16x16x16_f16 v[49:56], v[89:96], v[97:104], v[49:56]
-	v_wmma_f16_16x16x16_f16 v[33:40], v[81:88], v[97:104], v[33:40]
-	v_wmma_f16_16x16x16_f16 v[17:24], v[73:80], v[97:104], v[17:24]
-	v_wmma_f16_16x16x16_f16 v[1:8], v[65:72], v[97:104], v[1:8]
-	ds_load_b128 v[97:100], v127 offset:2560
-	ds_load_b128 v[101:104], v127 offset:2576
-	s_waitcnt lgkmcnt(0)
-	v_wmma_f16_16x16x16_f16 v[57:64], v[89:96], v[97:104], v[57:64] op_sel:[0,0,1]
-	v_wmma_f16_16x16x16_f16 v[41:48], v[81:88], v[97:104], v[41:48] op_sel:[0,0,1]
-	v_wmma_f16_16x16x16_f16 v[25:32], v[73:80], v[97:104], v[25:32] op_sel:[0,0,1]
-	v_wmma_f16_16x16x16_f16 v[9:16], v[65:72], v[97:104], v[9:16] op_sel:[0,0,1]
-	ds_load_b128 v[97:100], v127 offset:3840
-	ds_load_b128 v[101:104], v127 offset:3856
-	s_waitcnt lgkmcnt(0)
-	v_wmma_f16_16x16x16_f16 v[49:56], v[89:96], v[97:104], v[49:56] op_sel:[0,0,1]
-	v_wmma_f16_16x16x16_f16 v[33:40], v[81:88], v[97:104], v[33:40] op_sel:[0,0,1]
-	v_wmma_f16_16x16x16_f16 v[17:24], v[73:80], v[97:104], v[17:24] op_sel:[0,0,1]
-	v_wmma_f16_16x16x16_f16 v[1:8], v[65:72], v[97:104], v[1:8] op_sel:[0,0,1]
 	s_add_i32 s15, s15, 1
 	s_add_i32 s10, s10, 16
 	s_cmp_eq_u32 s11, s15
@@ -421,42 +393,76 @@ _ZN14rocm_wmma_gemm18block_k2_ring_gemm3runEP6__halfPKS1_S4_iii: ; @_ZN14rocm_wm
 .LBB0_16:                               ; %.preheader197
                                         ;   in Loop: Header=BB0_14 Depth=1
 	s_and_b32 s21, s10, 16
-	v_add_co_u32 v97, s6, s6, v124
 	s_lshl_b32 s18, s21, 1
-	v_cndmask_b32_e64 v100, 0, 1, s20
-	v_add_nc_u32_e32 v65, s18, v121
-	v_add_nc_u32_e32 v69, s18, v122
-	v_add_co_ci_u32_e64 v98, null, s7, 0, s6
-	ds_load_b128 v[89:92], v65
-	ds_load_b128 v[93:96], v65 offset:16
-	ds_load_b128 v[85:88], v65 offset:1296
-	ds_load_b128 v[81:84], v65 offset:1280
-	ds_load_b128 v[77:80], v65 offset:2576
-	ds_load_b128 v[73:76], v65 offset:2560
-	ds_load_b128 v[65:68], v69
-	ds_load_b128 v[69:72], v69 offset:16
+	; Recompute the fragment addresses so v117:v124 can hold a second B
+	; fragment. The extra VALU keeps the complete live set at 128 VGPR.
+	v_and_b32_e32 v125, 0xcf, v0
+	v_mul_u32_u24_e32 v125, 0x50, v125
+	v_add_nc_u32_e32 v125, s18, v125
+	v_or_b32_e32 v126, 48, v0
+	v_mul_u32_u24_e32 v126, 0x50, v126
+	v_add_nc_u32_e32 v126, s18, v126
+	ds_load_b128 v[89:92], v125
+	ds_load_b128 v[93:96], v125 offset:16
+	ds_load_b128 v[85:88], v125 offset:1296
+	ds_load_b128 v[81:84], v125 offset:1280
+	ds_load_b128 v[77:80], v125 offset:2576
+	ds_load_b128 v[73:76], v125 offset:2560
+	ds_load_b128 v[65:68], v126
+	ds_load_b128 v[69:72], v126 offset:16
+	v_lshlrev_b32_e32 v127, 1, v0
+	v_and_b32_e32 v127, 64, v127
+	v_and_b32_e32 v126, 15, v0
+	v_or_b32_e32 v127, v127, v126
+	v_mul_u32_u24_e32 v127, 0x50, v127
+	v_add_nc_u32_e32 v127, 0x5000, v127
+	v_lshl_add_u32 v127, s21, 1, v127
+	v_lshlrev_b32_e32 v125, 5, v0
+	v_add_co_u32 v125, s6, s6, v125
+	v_add_co_ci_u32_e64 v126, null, s7, 0, s6
 	s_and_not1_b32 vcc_lo, exec_lo, s20
 	s_cbranch_vccnz .LBB0_18
 ; %bb.17:                               ;   in Loop: Header=BB0_14 Depth=1
-	s_waitcnt vmcnt(0)
-	flat_load_b128 v[105:108], v[97:98]
+	s_clause 0x1
+	flat_load_b128 v[105:108], v[125:126]
+	flat_load_b128 v[109:112], v[125:126] offset:16
 .LBB0_18:                               ;   in Loop: Header=BB0_14 Depth=1
-	v_lshl_add_u32 v127, s21, 1, v123
-	v_cmp_ne_u32_e32 vcc_lo, 1, v100
-	s_cbranch_vccnz .LBB0_20
-; %bb.19:                               ;   in Loop: Header=BB0_14 Depth=1
-	s_waitcnt vmcnt(0)
-	flat_load_b128 v[109:112], v[97:98] offset:16
+	ds_load_b128 v[97:100], v127
+	ds_load_b128 v[101:104], v127 offset:16
+	ds_load_b128 v[117:120], v127 offset:1280
+	ds_load_b128 v[121:124], v127 offset:1296
+	s_waitcnt lgkmcnt(0)
+	v_wmma_f16_16x16x16_f16 v[57:64], v[89:96], v[97:104], v[57:64]
+	v_wmma_f16_16x16x16_f16 v[41:48], v[81:88], v[97:104], v[41:48]
+	v_wmma_f16_16x16x16_f16 v[25:32], v[73:80], v[97:104], v[25:32]
+	v_wmma_f16_16x16x16_f16 v[9:16], v[65:72], v[97:104], v[9:16]
+	v_wmma_f16_16x16x16_f16 v[49:56], v[89:96], v[117:124], v[49:56]
+	v_wmma_f16_16x16x16_f16 v[33:40], v[81:88], v[117:124], v[33:40]
+	v_wmma_f16_16x16x16_f16 v[17:24], v[73:80], v[117:124], v[17:24]
+	v_wmma_f16_16x16x16_f16 v[1:8], v[65:72], v[117:124], v[1:8]
 .LBB0_20:                               ;   in Loop: Header=BB0_14 Depth=1
-	v_cmp_ne_u32_e32 vcc_lo, 1, v100
+	s_and_not1_b32 vcc_lo, exec_lo, s20
 	s_cbranch_vccnz .LBB0_22
 ; %bb.21:                               ;   in Loop: Header=BB0_14 Depth=1
-	v_add_co_u32 v97, s0, s0, v118
+	v_lshlrev_b32_e32 v125, 4, v0
+	v_add_co_u32 v125, s0, s0, v125
 	s_delay_alu instid0(VALU_DEP_1)
-	v_add_co_ci_u32_e64 v98, null, s1, 0, s0
-	s_waitcnt vmcnt(0)
-	flat_load_b128 v[113:116], v[97:98]
+	v_add_co_ci_u32_e64 v126, null, s1, 0, s0
+	flat_load_b128 v[113:116], v[125:126]
 .LBB0_22:                               ;   in Loop: Header=BB0_14 Depth=1
+	ds_load_b128 v[97:100], v127 offset:2560
+	ds_load_b128 v[101:104], v127 offset:2576
+	ds_load_b128 v[117:120], v127 offset:3840
+	ds_load_b128 v[121:124], v127 offset:3856
+	s_waitcnt lgkmcnt(0)
+	v_wmma_f16_16x16x16_f16 v[57:64], v[89:96], v[97:104], v[57:64] op_sel:[0,0,1]
+	v_wmma_f16_16x16x16_f16 v[41:48], v[81:88], v[97:104], v[41:48] op_sel:[0,0,1]
+	v_wmma_f16_16x16x16_f16 v[25:32], v[73:80], v[97:104], v[25:32] op_sel:[0,0,1]
+	v_wmma_f16_16x16x16_f16 v[9:16], v[65:72], v[97:104], v[9:16] op_sel:[0,0,1]
+	v_wmma_f16_16x16x16_f16 v[49:56], v[89:96], v[117:124], v[49:56] op_sel:[0,0,1]
+	v_wmma_f16_16x16x16_f16 v[33:40], v[81:88], v[117:124], v[33:40] op_sel:[0,0,1]
+	v_wmma_f16_16x16x16_f16 v[17:24], v[73:80], v[117:124], v[17:24] op_sel:[0,0,1]
+	v_wmma_f16_16x16x16_f16 v[1:8], v[65:72], v[117:124], v[1:8] op_sel:[0,0,1]
 	s_and_b32 vcc_lo, exec_lo, s19
 	s_mov_b32 s0, -1
 	s_cbranch_vccz .LBB0_26
@@ -478,14 +484,20 @@ _ZN14rocm_wmma_gemm18block_k2_ring_gemm3runEP6__halfPKS1_S4_iii: ; @_ZN14rocm_wm
 	s_and_not1_b32 vcc_lo, exec_lo, s0
 	s_cbranch_vccnz .LBB0_13
 ; %bb.27:                               ;   in Loop: Header=BB0_14 Depth=1
-	v_add_nc_u32_e32 v125, s18, v119
+	v_mul_u32_u24_e32 v125, 0x50, v0
+	v_add_nc_u32_e32 v125, s18, v125
 	;;#ASMSTART
 	s_waitcnt vmcnt(0)
 	;;#ASMEND
 	;;#ASMSTART
 	s_waitcnt lgkmcnt(0)
 	;;#ASMEND
-	v_add_nc_u32_e32 v126, s18, v120
+	v_lshrrev_b32_e32 v126, 1, v0
+	v_lshlrev_b32_e32 v127, 4, v0
+	v_and_b32_e32 v127, 16, v127
+	v_mad_u32_u24 v126, 0x50, v126, v127
+	v_add_nc_u32_e32 v126, 0x5000, v126
+	v_add_nc_u32_e32 v126, s18, v126
 	s_waitcnt vmcnt(0) lgkmcnt(0)
 	s_barrier
 	ds_store_b128 v125, v[105:108]
@@ -493,7 +505,10 @@ _ZN14rocm_wmma_gemm18block_k2_ring_gemm3runEP6__halfPKS1_S4_iii: ; @_ZN14rocm_wm
 	ds_store_b128 v126, v[113:116]
 	s_branch .LBB0_13
 .LBB0_28:                               ; %.preheader195.loopexit
-	v_mov_b32_e32 v66, v117
+	v_lshlrev_b32_e32 v66, 1, v0
+	v_and_b32_e32 v66, 64, v66
+	v_and_b32_e32 v117, 15, v0
+	v_or_b32_e32 v66, v66, v117
 .LBB0_29:                               ; %Flow898
 	v_and_b32_e32 v65, 0xc0, v0
 	v_lshrrev_b32_e32 v0, 4, v0

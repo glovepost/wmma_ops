@@ -56,8 +56,19 @@ matrix_calculator.py -a gfx1151 -i v_wmma_f32_16x16x16_f16 -d
   Can co-execute with VALU: False
 matrix_calculator.py -a gfx1151 -i v_wmma_f32_16x16x16_f16 -A -M -w 32
   lane 29 -> A[13][*], lane 30 -> A[14][*], lane 31 -> A[15][*]
+matrix_calculator.py -a gfx1151 -i v_wmma_i32_16x16x16_iu4 -d
+  Execution cycles: 16     Ops: 8192     Ops/WGP/cycle: 2048
+  A/B: 2 VGPR each         C/D: 8 VGPR each
 ```
 Needs `tabulate`.
+
+For IU4, the ISA repurposes `NEG[0]` and `NEG[1]` as the signedness selectors
+for A and B.  Wave32 replicates both packed operand fragments in lanes 16-31.
+Each lane owns two operand VGPRs (eight nibbles per VGPR); D uses eight I32
+VGPRs, with even rows in lanes 0-15 and odd rows in lanes 16-31.  The checked-in
+[`bench_wmma_iu4.hip`](../tools/bench_wmma_iu4.hip) validates that mapping with
+a nonuniform signed tile rather than relying only on an all-ones throughput
+loop.
 
 **AMD composable_kernel** — canonical location is now
 <https://github.com/ROCm/rocm-libraries/tree/develop/projects/composablekernel>.

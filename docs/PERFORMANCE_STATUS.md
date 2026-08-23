@@ -238,6 +238,16 @@ cycles and is rated at 1024 FLOPs/WGP/cycle on gfx1151. With 20 WGPs at a
 2.9 GHz peak clock, that gives 59.4 TFLOPS. It is a clock-dependent nominal
 ceiling, not a measured sustained ceiling.
 
+The integer sibling `v_wmma_i32_16x16x16_iu4` performs 8192 integer operations
+in 16 execution cycles and is rated at 2048 operations/WGP/cycle, giving a
+118.8-TOPS nominal ceiling at the same clock.  A standalone signed-IU4 issue
+test reached 110.229 TOPS (92.8% of that ceiling) with 16 independent chains;
+four, eight, and twelve chains reached 108.380, 109.408, and 109.718 TOPS.
+Even one chain reached 103.040 TOPS because resident waves hide most of the
+dependency latency.  A separate nonuniform 16x16 product validates all 256
+outputs against the ISA's replicated-operand and split-row result mapping.
+These are integer TOPS, not TFLOPS, and do not change the FP16 record.
+
 At 256 GB/s, the corresponding compute-to-memory ridge point is about
 232 FLOP/byte (`59.4e12 / 256e9`), not 106 FLOP/byte. Both inputs should be
 replaced by observed clocks and sustained bandwidth when making a measured

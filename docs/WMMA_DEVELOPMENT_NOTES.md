@@ -3077,22 +3077,52 @@ A K32 slice-major two-slot ring now packs operands as
 39.292 TFLOPS; the dedicated form used 151 VGPR.  ISA inspection found LLVM
 hoisting all four B fragments, extending 24 unnecessary VGPRs.  The current
 hand-scheduled assembly reuses one eight-register B fragment and assembles at
-128 VGPR with no spills and 30,720 bytes of LDS.  Its first exclusive
-full-reference validation **failed correctness**: normalized maximum error
-1.548774126, RMS error 7.342748277, and cosine similarity 0.052115086.  The
-timing sample was 32.046 TFLOPS, but performance is not meaningful for a
-rejected result.  The assembly must be debugged against the C++ reference
-before it can re-enter the timing queue.
+128 VGPR with no spills and 30,720 bytes of LDS.  The initial validation
+failure was a schedule bug: B fragments were read after refill stores had
+started replacing the slot.  Loading B first restored the exact reference
+tuple.  Interleaving refill VMEM between B groups reached 41.988 TFLOPS
+sustained (43.667 short), versus 47.767 for the same-pass p8 control.  A
+two-B-fragment form with recomputed addresses retained 128 VGPR but reached
+only 39.921 TFLOPS.  K32 barrier reduction is correct but rejected on speed.
 
-The next same-pass screens are:
+The 5x8 and cyclic-skewed 5x8 workgroup mappings also passed correctness and
+reached 46.640 and 45.985 TFLOPS respectively, versus a 47.793 TFLOPS
+same-pass control.  Composable Kernel's `s_setprio` pattern reached 42.439
+versus 47.937 TFLOPS.  A wait-after-barrier schedule was neutral (47.789
+versus 47.889 TFLOPS), while split `s_barrier_signal`/`s_barrier_wait`
+instructions are not supported by the gfx1151 assembler.
 
-1. 5x8 and cyclic-skewed 5x8 workgroup mappings, motivated by the tritonBLAS
-   cache-locality model and the 40-CU factorization.  Both pass a GPU-free
-   512-tile bijection check and compile at 119 VGPR, 26 SGPR, and 18 KiB LDS.
-2. `WMMA_BP_SET_PRIO=1`, following Composable Kernel's gfx11 interwave
-   scheduling pattern.  Offline ISA contains one priority raise/lower pair
-   around each 16-WMMA cluster while retaining 118 VGPR, 22 SGPR, and 18 KiB
-   LDS.
+A distinct wave-private-A architecture gives each wave its own 64x16 A tile
+and double-buffers the shared B tile.  It uses exactly 32 KiB LDS, 123 VGPR,
+and no spills, retaining two blocks/16 waves per CU while reducing the K16
+loop to one barrier.  It passed the full-reference tuple but reached only
+37.707 TFLOPS; duplicate A loads for paired N waves erase the synchronization
+saving.
+
+### IU4 ISA and hardware qualification
+
+The gfx1151 `v_wmma_i32_16x16x16_iu4` path has now been read from the RDNA3.5
+ISA, checked with AMD's Matrix Instruction Calculator, compiled through the
+ROCm 7.14 builtin, and measured.  Each lane supplies two packed-nibble VGPRs
+for A and B and eight I32 accumulator VGPRs.  `NEG[0]`/`NEG[1]` select signed
+or unsigned interpretation.  The instruction performs 8192 integer operations
+in 16 cycles; at 20 WGPs and 2.9 GHz its nominal ceiling is 118.8 TOPS.
+
+The standalone harness validates the full nonuniform 16x16 product, including
+the repeated A/B operand halves and the even/odd-row D mapping.  It then uses
+independent accumulator chains for issue-rate measurement.  All checks pass;
+1/2/4/8/12/16 chains reached 103.040/98.107/108.380/109.408/109.718/110.229
+INT4 TOPS.  Four chains are already within 1.7% of the best result, an important
+register-budget result for a real kernel.
+
+This is not directly usable by the current ROCmFP4 path.  Codebook10 is a
+nonlinear signed codebook with magnitudes through 10, not a linear signed-IU4
+encoding, and activations are not currently W4.  A direct exact sum-of-linear
+weight decomposition needs at least two IU4 products; a single IU4 still needs
+nonlinear correction work, before activation decomposition and scaling.
+Future work should therefore treat linear W4A4 as a new quantization/quality
+contract and retain the existing Codebook10 DP4A path until that contract
+passes the model quality gates.
 
 Current literature supports the same constraint observed experimentally:
 Tawa, HipKittens, and FIBER all highlight that effective producer/consumer

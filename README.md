@@ -29,6 +29,7 @@ package-power window, not finding a one-off peak.
 | **41.322 TFLOPS** | 4096 cubed | FP16 inputs, FP32 accumulate/output | Validated standalone peak |
 | **40.900 TFLOPS median** | 4096 cubed | Same | Five fresh processes; strict gate not met |
 | **46.082 TFLOPS median** | 4096 cubed | FP16 inputs/output | Upstream `bench_half_half`; separate numerical contract |
+| **110.229 INT4 TOPS** | IU4 issue-rate microbenchmark | signed INT4 inputs, INT32 accumulate | ISA qualification only; not an FP16 GEMM result |
 | 21.6 TFLOPS | 4096 cubed | FP16 inputs, FP32 output | Historical PyTorch-extension result |
 | about 41 TFLOPS | 4096 cubed | FP16 inputs/output | Historical `torch.mm` comparison; different contract |
 
@@ -44,6 +45,15 @@ shape. See the performance ledger for the full command and timing distribution.
 
 The clock-derived nominal ceiling is 59.4 TFLOPS: 20 WGPs x 1024
 FLOP/WGP/cycle x 2.9 GHz. It is not a measured sustained ceiling.
+
+The separate IU4 qualification uses `v_wmma_i32_16x16x16_iu4` and reaches
+110.229 INT4 TOPS against its 118.8-TOPS clock-derived ceiling.  It validates
+the nonuniform 16x16 product and the gfx1151 lane/register mapping exactly.
+This is evidence about the integer matrix unit, not a new FP16 record: using it
+for inference requires an INT4 activation/weight contract and scale handling.
+The checked-in default uses eight independent chains; compile with
+`-DIU4_CHAINS=16` to reproduce the peak configuration.  See
+[`tools/bench_wmma_iu4.hip`](tools/bench_wmma_iu4.hip).
 
 Read [the performance ledger](docs/PERFORMANCE_STATUS.md) before comparing
 numbers. It contains the exact schedule, distributions, rejected experiments,

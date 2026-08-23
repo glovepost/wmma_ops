@@ -23,6 +23,9 @@
 #if RECORD_BLOCK_K2_RING
 #include <rocm_wmma_gemm/kernel/block_k2_ring.hpp>
 #endif
+#if RECORD_WAVEPRIVATE_A
+#include <rocm_wmma_gemm/kernel/waveprivate_a.hpp>
+#endif
 
 #include <algorithm>
 #include <bit>
@@ -105,6 +108,9 @@ namespace {
 #ifndef RECORD_BLOCK_K2_RING
 #define RECORD_BLOCK_K2_RING 0
 #endif
+#ifndef RECORD_WAVEPRIVATE_A
+#define RECORD_WAVEPRIVATE_A 0
+#endif
 #ifndef RECORD_BLOCK_SLICE_MAJOR
 #define RECORD_BLOCK_SLICE_MAJOR 0
 #endif
@@ -112,7 +118,7 @@ namespace {
 #define RECORD_PRODUCER_WAVES 5
 #endif
 #define RECORD_BLOCK_CONTRACT \
-    (RECORD_BLOCK_PREPACKED | RECORD_BLOCK_K2_RING)
+    (RECORD_BLOCK_PREPACKED | RECORD_BLOCK_K2_RING | RECORD_WAVEPRIVATE_A)
 
 constexpr int kSize = 4096;
 constexpr int kWarmupDefault = 200;
@@ -123,7 +129,9 @@ constexpr double kPromotionTargetTflops = 50.0;
 // Tuned parameter order:
 // warps_m, warps_n, warp_tile_m, warp_tile_n, k_slices, single_buffer,
 // swizzle, vector bits, alignment fast path.
-#if RECORD_BLOCK_K2_RING
+#if RECORD_WAVEPRIVATE_A
+using RecordKernel = rocm_wmma_gemm::waveprivate_a_gemm;
+#elif RECORD_BLOCK_K2_RING
 using RecordKernel = rocm_wmma_gemm::block_k2_ring_gemm;
 #elif RECORD_BLOCK_PREPACKED
 using RecordKernel = rocm_wmma_gemm::block_prepacked_gemm;
