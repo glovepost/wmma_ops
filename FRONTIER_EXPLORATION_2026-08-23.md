@@ -263,6 +263,15 @@ Because the control admits two blocks per CU, consecutive 5x8 groups also make
 the first 80 resident workgroups an effective 5x16 region that reuses the same
 five A tiles across both block slots.
 
+The current Origami implementation in `ROCm/rocm-libraries` commit
+`dab5e862a64f05b4f7323886465eb957444573d9` explicitly supports gfx1151, but
+its workgroup selector short-circuits to WGM=1 when `NUM_XCD == 1`.  It does
+not directly predict 5x8 for Strix Halo.  This candidate is therefore an
+extrapolation of the paper's cache-cost model, not a claim about AMD's selected
+configuration.  Of the grid-compatible 40-workgroup rectangles, 5x8 and 4x10
+have the same estimated unique-input cost; 5x8 leaves one contiguous 32-tile M
+row and lets the snake traversal join that tail at the same N edge.
+
 AMD FlyDSL at commit `11c4174d82b7491c2d08d5828a254183f2a8b959` independently
 uses a 128x128x32, four-wave, double-buffered gfx11 WMMA kernel.  It confirms
 three relevant design choices: 128-bit cooperative copies, eight-row L2
