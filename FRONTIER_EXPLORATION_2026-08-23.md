@@ -246,6 +246,53 @@ hand-scheduled form reuses one eight-register B fragment, assembles at exactly
 128 VGPR with zero spills and 30,720 bytes of LDS, and is queued for its first
 exclusive correctness/performance screen.
 
+### Post-sweep research queue
+
+AMD's `tritonBLAS` paper (arXiv 2512.04226) models GEMM locality at the
+instruction, register, workgroup, cache, and global levels.  Its cache-scope
+factorization gives a concrete gfx1151 mapping experiment: 40 CUs factor as
+5x8.  For the retained 256x128 tile, a 5-M by 8-N supertile reuses the larger A
+edge across eight workgroups and the B edge across five.  The paper's simple
+reuse estimate is `1 - U/R = 85%`, versus 82.5% for the transposed 8x5 choice.
+The 4096-cube grid is 16x32 tiles, so it contains twelve exact 40-workgroup
+groups plus a 32-workgroup tail.  Mapping modes 5 and 6 implement the plain and
+cyclic-row-skewed 5x8 forms; a GPU-free bijection check covers all 512 tiles.
+Both compile at 119 VGPR, 26 SGPR, and 18 KiB LDS, so their one-VGPR increase
+over the p8 control does not change its two-block/16-wave occupancy class.
+Because the control admits two blocks per CU, consecutive 5x8 groups also make
+the first 80 resident workgroups an effective 5x16 region that reuses the same
+five A tiles across both block slots.
+
+AMD FlyDSL at commit `11c4174d82b7491c2d08d5828a254183f2a8b959` independently
+uses a 128x128x32, four-wave, double-buffered gfx11 WMMA kernel.  It confirms
+three relevant design choices: 128-bit cooperative copies, eight-row L2
+grouping, and explicit VMEM/DS-read/WMMA/DS-write schedule groups.  Its source
+also records that the gfx11 v16 WMMA ABI duplicates operands across wave halves
+and proposes `ds_swizzle_b32` XOR16 broadcasts to halve LDS reads.  That
+broadcast is lower priority here: each 16-half fragment would trade two
+half-wave LDS reads for eight cross-lane DS operations, and the retained
+kernel's identical upper/lower addresses already benefit from LDS multicast.
+
+Composable Kernel at commit `07944e928fa3d8ec4c60e7d1ba9af043f52be02f`
+provides a more directly testable gfx11 scheduling detail.  Its WMMA
+"interwave" v1 pipeline phase-aligns workgroup waves, raises `s_setprio` during
+the MAC cluster, and lowers it before the LDS handoff so lagging waves are less
+likely to extend barrier tails.  Our K16 loop is already synchronized at every
+cluster boundary, so `WMMA_BP_SET_PRIO=1` isolates the remaining priority hint
+without changing dataflow, allocation, or correctness semantics.
+Offline ROCm 7.14 codegen keeps the control's 118 VGPR, 22 SGPR, and 18 KiB
+LDS; the final ISA contains exactly one priority-1/priority-0 pair around each
+16-WMMA hot-loop and tail cluster.
+
+The 2026 FIBER paper (arXiv 2608.19628) reinforces that static private-register
+allocation is the fundamental obstacle to producer/consumer specialization,
+but its solution requires new shared-register hardware and ISA support.  It
+does not supply an implementable gfx1151 path.  The queued GPU order after the
+current external sweep is therefore: validate the hand K32 candidate, screen
+5x8 mapping modes 5/6 against a same-pass p8 control, then screen `s_setprio`.
+Only a correct same-pass improvement advances to the sustained fresh-process
+promotion gate.
+
 ## Decision
 
 The correct block/K-major p8 kernel materially exceeds the original-layout

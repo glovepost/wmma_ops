@@ -82,6 +82,9 @@ namespace rocm_wmma_gemm
 #ifndef WMMA_BP_WARP_TILE_M
 #define WMMA_BP_WARP_TILE_M 4
 #endif
+#ifndef WMMA_BP_SET_PRIO
+#define WMMA_BP_SET_PRIO 0
+#endif
 
 struct block_prepacked_gemm
 {
@@ -758,7 +761,23 @@ struct block_prepacked_gemm
             {
                 const half* next_a = a_tile + (k_tile + 1) * a_tile_elements;
                 const half* next_b_ptr = b_tile + (k_tile + 1) * b_tile_elements;
+                // CK's gfx11 inter-wave WMMA scheduler raises priority for the
+                // MAC cluster, then drops it before the LDS handoff.  Keep the
+                // experiment opt-in: all waves still execute identical work,
+                // and the surrounding barriers retain the existing ordering.
+                if constexpr(WMMA_BP_SET_PRIO)
+                {
+                    __builtin_amdgcn_sched_barrier(0);
+                    __builtin_amdgcn_s_setprio(1);
+                    __builtin_amdgcn_sched_barrier(0);
+                }
                 compute_tile.template operator()<true>(next_a, next_b_ptr);
+                if constexpr(WMMA_BP_SET_PRIO)
+                {
+                    __builtin_amdgcn_sched_barrier(0);
+                    __builtin_amdgcn_s_setprio(0);
+                    __builtin_amdgcn_sched_barrier(0);
+                }
 
                 if constexpr(WMMA_BP_SPLIT_BARRIER)
                 {
@@ -782,7 +801,19 @@ struct block_prepacked_gemm
                 __builtin_amdgcn_s_waitcnt(0x7f);
                 __syncthreads();
             }
+            if constexpr(WMMA_BP_SET_PRIO)
+            {
+                __builtin_amdgcn_sched_barrier(0);
+                __builtin_amdgcn_s_setprio(1);
+                __builtin_amdgcn_sched_barrier(0);
+            }
             compute_tile.template operator()<false>(nullptr, nullptr);
+            if constexpr(WMMA_BP_SET_PRIO)
+            {
+                __builtin_amdgcn_sched_barrier(0);
+                __builtin_amdgcn_s_setprio(0);
+                __builtin_amdgcn_sched_barrier(0);
+            }
         }
         else if constexpr(WMMA_BP_DOUBLE_BUFFER_LATE)
         {

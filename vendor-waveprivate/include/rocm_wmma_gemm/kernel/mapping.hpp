@@ -68,6 +68,74 @@ public:
     }
 };
 
+/**
+ * @brief gfx1151 record-shape traversal in 5x8 workgroup supertiles.
+ *
+ * A 5x8 supertile contains exactly 40 workgroups, matching the 40 CUs on
+ * Strix Halo. For the 256x128 record tile this lets one dispatch wave share
+ * each A tile across eight N positions and each B tile across five M
+ * positions through L2. Odd M bands reverse the N traversal so consecutive
+ * supertiles retain the B edge, like the generic snake mapping.
+ */
+template<int BLOCK_M, int BLOCK_N, bool SKEW>
+class cu_5x8_record_mapping
+{
+public:
+    static __device__ __forceinline__ void
+        map_tile(int tile_id, int grid_m, int grid_n, int* block_row, int* block_col)
+    {
+        if(grid_m != 16 || grid_n != 32)
+        {
+            row_major_mapping<BLOCK_M, BLOCK_N>::map_tile(
+                tile_id, grid_m, grid_n, block_row, block_col);
+            return;
+        }
+
+        constexpr int group_m = 5;
+        constexpr int group_n = 8;
+        constexpr int groups_n = 4;
+        constexpr int group_tiles = group_m * group_n;
+        constexpr int full_m_groups = 3;
+        constexpr int full_tiles
+            = full_m_groups * groups_n * group_tiles;
+
+        int row = 0;
+        int col = 0;
+        if(tile_id < full_tiles)
+        {
+            const int group = tile_id / group_tiles;
+            const int local = tile_id - group * group_tiles;
+            const int outer_m = group / groups_n;
+            const int logical_outer_n = group - outer_m * groups_n;
+            const int outer_n = (outer_m & 1)
+                ? groups_n - 1 - logical_outer_n
+                : logical_outer_n;
+            const int local_n = local / group_m;
+            int local_m = local - local_n * group_m;
+            if constexpr(SKEW)
+            {
+                local_m += local_n;
+                if(local_m >= 10)
+                    local_m -= 10;
+                else if(local_m >= 5)
+                    local_m -= 5;
+            }
+            row = outer_m * group_m + local_m;
+            col = outer_n * group_n + local_n;
+        }
+        else
+        {
+            // The 16x32 grid leaves one 32-workgroup row. Reverse it so the
+            // final full band and the tail meet at the same N edge.
+            row = 15;
+            col = 31 - (tile_id - full_tiles);
+        }
+
+        *block_row = row * BLOCK_M;
+        *block_col = col * BLOCK_N;
+    }
+};
+
 /** Power-of-two Morton traversal used by the 16x32 record tile grid. */
 template<int BLOCK_M, int BLOCK_N, bool N_FIRST>
 class morton_record_mapping
@@ -369,6 +437,12 @@ public:
                 tile_id, grid_m, grid_n, block_row, block_col);
         else if constexpr(WMMA_MAPPING_MODE == 4)
             col_major_mapping<BLOCK_M, BLOCK_N>::map_tile(
+                tile_id, grid_m, grid_n, block_row, block_col);
+        else if constexpr(WMMA_MAPPING_MODE == 5)
+            cu_5x8_record_mapping<BLOCK_M, BLOCK_N, false>::map_tile(
+                tile_id, grid_m, grid_n, block_row, block_col);
+        else if constexpr(WMMA_MAPPING_MODE == 6)
+            cu_5x8_record_mapping<BLOCK_M, BLOCK_N, true>::map_tile(
                 tile_id, grid_m, grid_n, block_row, block_col);
         else
             base_type::map_tile(tile_id, grid_m, grid_n, block_row, block_col);

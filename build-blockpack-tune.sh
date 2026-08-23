@@ -18,7 +18,7 @@ for pair in 0:8 8:0 8:16 16:8 16:16; do
         rocwmma_half_record.hip -lrocblas -o "bp-pa${pa}-pb${pb}"
 done
 
-for mode in 1 2 3 4; do
+for mode in 1 2 3 4 5 6; do
     hipcc "${common[@]}" -DWMMA_MAPPING_MODE="${mode}" \
         rocwmma_half_record.hip -lrocblas -o "bp-map${mode}"
 done
@@ -32,6 +32,8 @@ hipcc "${common[@]}" -DWMMA_BP_SPLIT_BARRIER=1 \
     rocwmma_half_record.hip -lrocblas -o bp-split-barrier
 hipcc "${common[@]}" -DWMMA_BP_WAIT_AFTER_BARRIER=1 \
     rocwmma_half_record.hip -lrocblas -o bp-wait-after-barrier
+hipcc "${common[@]}" -DWMMA_BP_SET_PRIO=1 \
+    rocwmma_half_record.hip -lrocblas -o bp-setprio
 
 for bounds in 1:8 4:8 2:4; do
     minimum=${bounds%%:*}
