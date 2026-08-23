@@ -3012,3 +3012,108 @@ Renamed header files for clarity:
 **PyTorch/rocBLAS reference**: 37.4 TFLOPS (63% of peak)
 
 All 12 kernel variants pass correctness tests with ~0.026% relative error.
+
+---
+
+## 2026-08-23 frontier campaign update
+
+This section records the current campaign without rewriting the historical
+entries above.  The full experiment ledger, including rejected variants and
+reproduction details, is in
+[`FRONTIER_EXPLORATION_2026-08-23.md`](../FRONTIER_EXPLORATION_2026-08-23.md).
+The public repository record and the persistent-prepacked experiments use
+different numerical and input-layout contracts and must not be conflated.
+
+### Current reference points
+
+| Contract | Result | Status |
+|---|---:|---|
+| Repository FP16 input / FP32 accumulation and output | 41.322 TFLOPS peak | Full rocBLAS-reference validation; five-process median 40.900 TFLOPS, so the sustained promotion gate remains open |
+| Upstream FP16 input / FP16 output control | 46.082 TFLOPS median | Reproduced from three fresh processes; external comparison, not the repository record |
+| Original-layout FP16-output control in the block-pack campaign | 45.697 TFLOPS | Same-pass screening control |
+| Persistent block/K-major FP16-output inputs | **48.614 TFLOPS** | Current correct sustained leader for the separate prepacked-input contract |
+| Best short persistent block/K-major pass | 49.573 TFLOPS | Below the 50 TFLOPS gate and not sustained |
+
+The retained persistent-input leader is a 256x128 N-packed, padding-8 kernel.
+Its K16 loop contains 16 WMMAs, 16 `ds_load_b128` instructions, three
+cooperative `global_load_b128` instructions, three `ds_store_b128`
+instructions, nine waitcnts, and two barriers.  It uses 118 VGPR, 22 SGPR, and
+18 KiB LDS and reproduces the tightened error tuple: normalized maximum error
+0.018779343, RMS error 0.035428338, and cosine similarity 0.999977929.
+
+Two isolated short samples crossed 50 TFLOPS (50.216 for the control schedule
+and 50.338 for a progressive LDS schedule), but both regressed in longer
+same-pass comparisons.  They are recorded as power/noise excursions, not
+records.  Promotion still requires correctness plus a sustained improvement
+across fresh processes.
+
+### What the latest experiments established
+
+- Inter-wave producer/consumer kernels remain register-allocation limited on
+  gfx1151.  Producer and consumer paths inherit one kernel-wide allocation;
+  reducing consumer state restores occupancy only by removing independent
+  WMMA chains.  Measured variants reached 5.747--7.098 TFLOPS.
+- Explicit in-wave transposes do not beat native scalar LDS fragment loads.
+  The best one-sided 2x2 DPP form reached 25.545 TFLOPS.  DPP work and live
+  state cost more than the existing LDS multicast/bank behavior saves.
+- Whole-matrix native-order prepacking loses global coalescing.  Block/K-major
+  16-wide microtiles are the useful contract: they preserve cooperative b128
+  loads while presenting operands in WMMA fragment order.
+- Padding both A and B by eight halves is jointly necessary.  Removing either
+  padding side falls to 44.85--45.71 TFLOPS.  XOR-snake swizzle 16 remains the
+  best measured block mapping within the kernel.
+- Loop unrolling, compiler-generated ping-pong, 16-wave geometry, compact XOR
+  LDS layouts, paired LDS reads, alternate allocation offsets, and scheduler
+  flag sweeps did not improve the retained leader.
+- Separate rocprofiler-Compute collection attributes 14.6% of wave cycles to
+  barrier waits and 11.7% to waitcnt stalls for the block-packed kernel.  A
+  one-barrier K step remains the measured goal, provided it preserves the
+  leader's two-block, 16-wave residency.
+
+### Hand-scheduled K32 and queued follow-ups
+
+A K32 slice-major two-slot ring now packs operands as
+`[block][K32][slice][row][K16]`.  The first C++ form used 202 VGPR and reached
+39.292 TFLOPS; the dedicated form used 151 VGPR.  ISA inspection found LLVM
+hoisting all four B fragments, extending 24 unnecessary VGPRs.  The current
+hand-scheduled assembly reuses one eight-register B fragment and assembles at
+128 VGPR with no spills and 30,720 bytes of LDS.  Its first exclusive
+full-reference validation **failed correctness**: normalized maximum error
+1.548774126, RMS error 7.342748277, and cosine similarity 0.052115086.  The
+timing sample was 32.046 TFLOPS, but performance is not meaningful for a
+rejected result.  The assembly must be debugged against the C++ reference
+before it can re-enter the timing queue.
+
+The next same-pass screens are:
+
+1. 5x8 and cyclic-skewed 5x8 workgroup mappings, motivated by the tritonBLAS
+   cache-locality model and the 40-CU factorization.  Both pass a GPU-free
+   512-tile bijection check and compile at 119 VGPR, 26 SGPR, and 18 KiB LDS.
+2. `WMMA_BP_SET_PRIO=1`, following Composable Kernel's gfx11 interwave
+   scheduling pattern.  Offline ISA contains one priority raise/lower pair
+   around each 16-WMMA cluster while retaining 118 VGPR, 22 SGPR, and 18 KiB
+   LDS.
+
+Current literature supports the same constraint observed experimentally:
+Tawa, HipKittens, and FIBER all highlight that effective producer/consumer
+specialization depends on asynchronous copy/barrier facilities or dynamic
+register sharing that gfx1151 does not provide.  AMD FlyDSL reinforces the
+use of 128-bit cooperative copies and explicit load/WMMA/store schedule groups.
+These references informed the queued experiments; they are not performance
+evidence by themselves.
+
+### Shared-box validation discipline
+
+Every model-loading or GPU profiling command must acquire `/root/gpu.lock`.
+Only one large model fits in the shared UMA budget; a second loader can silently
+fall back to hybrid expert placement and invalidate both performance and token
+comparisons.  Before treating a mismatch as a regression, check free memory and
+stale containers.  The supported pattern is:
+
+```bash
+flock -w 7200 /root/gpu.lock -c '<exclusive validation command>'
+```
+
+Correctness runs before timing, profiler counters are collected in separate
+passes, and only a correct same-pass improvement advances to the sustained
+fresh-process promotion gate.

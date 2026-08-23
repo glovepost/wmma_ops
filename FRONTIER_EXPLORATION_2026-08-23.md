@@ -243,8 +243,12 @@ tuple but inflated to 202 VGPR, one block per CU, and only 39.292 TFLOPS.  A
 minimal dedicated kernel reduced that to 151 VGPR.  ISA inspection showed LLVM
 had hoisted all four B LDS fragments, extending 24 unnecessary VGPRs.  The
 hand-scheduled form reuses one eight-register B fragment, assembles at exactly
-128 VGPR with zero spills and 30,720 bytes of LDS, and is queued for its first
-exclusive correctness/performance screen.
+128 VGPR with zero spills and 30,720 bytes of LDS.  Its first exclusive screen
+failed the full-reference gate: normalized maximum error 1.548774126, RMS
+error 7.342748277, and cosine similarity 0.052115086.  The associated timing
+sample was 32.046 TFLOPS, but timing is not comparable for a rejected result.
+The hand schedule must be debugged against the correct C++ implementation
+before any further performance screen.
 
 ### Post-sweep research queue
 
@@ -296,11 +300,10 @@ LDS; the final ISA contains exactly one priority-1/priority-0 pair around each
 The 2026 FIBER paper (arXiv 2608.19628) reinforces that static private-register
 allocation is the fundamental obstacle to producer/consumer specialization,
 but its solution requires new shared-register hardware and ISA support.  It
-does not supply an implementable gfx1151 path.  The queued GPU order after the
-current external sweep is therefore: validate the hand K32 candidate, screen
-5x8 mapping modes 5/6 against a same-pass p8 control, then screen `s_setprio`.
-Only a correct same-pass improvement advances to the sustained fresh-process
-promotion gate.
+does not supply an implementable gfx1151 path.  With the hand K32 candidate
+rejected by validation, the queued GPU order is now: screen 5x8 mapping modes
+5/6 against a same-pass p8 control, then screen `s_setprio`.  Only a correct
+same-pass improvement advances to the sustained fresh-process promotion gate.
 
 ## Decision
 
