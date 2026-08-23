@@ -3124,6 +3124,23 @@ Future work should therefore treat linear W4A4 as a new quantization/quality
 contract and retain the existing Codebook10 DP4A path until that contract
 passes the model quality gates.
 
+The follow-up full GEMM prototype uses block/K-major linear INT4 inputs and
+exact INT32 output.  Its retained 128x128 schedule has eight waves, a 4x2
+WMMA-tile footprint per wave, eight independent accumulators, double-buffered
+4 KiB LDS, and one barrier per K16.  LLVM allocates 89 VGPR and 22 SGPR with
+no spills.  The two-DWORD LDS row is deliberately unpadded: 16 unique lanes
+span the 32 banks exactly once and the upper wave half is a replicated
+multicast.  Padding to three DWORDs fell to 83.416 TOPS.
+
+The complete 4096-cubed kernel reached 85.907 INT4 TOPS (1.599854 ms) and
+matched all 16,777,216 outputs exactly.  Same-pass geometry brackets favored
+four wave columns at 85.063/85.907 TOPS over two columns at 84.992/84.182.
+A 256x128 tile used 159 VGPR and reached only 78.367 TOPS.  This is the first
+new architecture in the campaign to exceed 50 under its own full GEMM
+contract, but the unit is integer and the inputs are prequantized: it is not a
+50-TFLOPS FP16 result.  The next inference-facing gate is model-quality testing
+of a linear W4A4 quantizer and the cost of activation packing/scales.
+
 Current literature supports the same constraint observed experimentally:
 Tawa, HipKittens, and FIBER all highlight that effective producer/consumer
 specialization depends on asynchronous copy/barrier facilities or dynamic

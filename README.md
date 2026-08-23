@@ -29,6 +29,7 @@ package-power window, not finding a one-off peak.
 | **41.322 TFLOPS** | 4096 cubed | FP16 inputs, FP32 accumulate/output | Validated standalone peak |
 | **40.900 TFLOPS median** | 4096 cubed | Same | Five fresh processes; strict gate not met |
 | **46.082 TFLOPS median** | 4096 cubed | FP16 inputs/output | Upstream `bench_half_half`; separate numerical contract |
+| **85.907 INT4 TOPS** | 4096 cubed | prepacked linear W4A4, INT32 output | Exact full-output validation; separate numerical contract |
 | **110.229 INT4 TOPS** | IU4 issue-rate microbenchmark | signed INT4 inputs, INT32 accumulate | ISA qualification only; not an FP16 GEMM result |
 | 21.6 TFLOPS | 4096 cubed | FP16 inputs, FP32 output | Historical PyTorch-extension result |
 | about 41 TFLOPS | 4096 cubed | FP16 inputs/output | Historical `torch.mm` comparison; different contract |
@@ -54,6 +55,14 @@ for inference requires an INT4 activation/weight contract and scale handling.
 The checked-in default uses eight independent chains; compile with
 `-DIU4_CHAINS=16` to reproduce the peak configuration.  See
 [`tools/bench_wmma_iu4.hip`](tools/bench_wmma_iu4.hip).
+
+A complete prepacked linear-W4A4 GEMM built on that instruction reaches 85.907
+INT4 TOPS at 4096 cubed and matches all 16,777,216 INT32 reference outputs
+exactly.  The 128x128 block uses eight waves, eight independent accumulators
+per wave, double-buffered 4 KiB LDS, and one barrier per K16.  This is a viable
+new kernel architecture, but adopting it for model inference requires a new
+quantization and quality contract.  See
+[`tools/bench_wmma_iu4_gemm.hip`](tools/bench_wmma_iu4_gemm.hip).
 
 Read [the performance ledger](docs/PERFORMANCE_STATUS.md) before comparing
 numbers. It contains the exact schedule, distributions, rejected experiments,

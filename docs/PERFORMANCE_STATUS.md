@@ -248,6 +248,19 @@ dependency latency.  A separate nonuniform 16x16 product validates all 256
 outputs against the ISA's replicated-operand and split-row result mapping.
 These are integer TOPS, not TFLOPS, and do not change the FP16 record.
 
+A complete prepacked linear-W4A4 GEMM retains 85.907 INT4 TOPS at 4096 cubed
+(1.599854 ms) while matching all 16,777,216 INT32 outputs exactly.  Its
+128x128 block has eight waves, eight independent accumulators per wave,
+double-buffered conflict-free packed LDS, one barrier per K16, 89 VGPR,
+22 SGPR, 4,096 bytes of LDS, and no spills.  Repeating the two wave geometries
+in one exclusive pass favored four wave columns: 85.063 and 85.907 TOPS versus
+84.992 and 84.182 for two wave columns.  A padded 12-byte LDS row reached only
+83.416 TOPS, and a 256x128 block rose to 159 VGPR and fell to 78.367 TOPS.
+
+This result demonstrates that a full data-moving IU4 kernel can exceed the
+50-operations/s target, but it remains a distinct integer contract.  It is not
+eligible for the FP16 TFLOPS table or record gate.
+
 At 256 GB/s, the corresponding compute-to-memory ridge point is about
 232 FLOP/byte (`59.4e12 / 256e9`), not 106 FLOP/byte. Both inputs should be
 replaced by observed clocks and sustained bandwidth when making a measured

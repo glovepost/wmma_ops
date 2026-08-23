@@ -349,6 +349,23 @@ output conversion.  The credible IU4 route is a separately quality-gated
 linear W4A4 format, not a bitwise reuse of the current ROCmFP4 weights and not
 a TFLOPS claim.
 
+The first full W4A4 architecture is now measured rather than inferred.  It
+uses a 128x128 workgroup tile, eight waves, eight independent I32 accumulator
+fragments per wave, block/K-major packed operands, double-buffered 4 KiB LDS,
+and one barrier per K16.  The conflict-free LDS row is exactly two DWORDs: the
+16 unique operand lanes cover all 32 banks once, while lanes 16-31 request the
+same addresses for multicast.  It compiles at 89 VGPR and 22 SGPR with no
+spills.
+
+At 4096 cubed it reached **85.907 INT4 TOPS** in 1.599854 ms and matched every
+one of 16,777,216 structured-reference INT32 outputs exactly.  Two bracketed
+same-pass runs of the four-wave-column geometry reached 85.063 and 85.907
+TOPS, versus 84.992 and 84.182 for the transposed two-column geometry.  A
+12-byte padded LDS row was slower at 83.416 TOPS.  Doubling the M tile to
+256x128 doubled the per-wave accumulator set, raised allocation to 159 VGPR,
+and regressed to 78.367 TOPS.  This makes the 128x128, four-column form the
+retained W4A4 architecture.
+
 ## Decision
 
 The correct block/K-major p8 kernel materially exceeds the original-layout
