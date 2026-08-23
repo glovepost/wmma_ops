@@ -1,0 +1,1073 @@
+/*
+ * Experimental persistent-input GEMM for gfx1151.
+ *
+ * A and B are packed into block/K-major 16-wide microtiles before timing:
+ *   A[bm][bk][m_local][k_local]
+ *   B[bn][bk][n_local][k_local]
+ * This preserves cooperative, contiguous global reads while placing both LDS
+ * operands in the native WMMA fragment order.  It is a different input
+ * contract from the ordinary column-major-A/row-major-B benchmark.
+ */
+#ifndef ROCM_WMMA_GEMM_BLOCK_PREPACKED_HPP
+#define ROCM_WMMA_GEMM_BLOCK_PREPACKED_HPP
+
+#include "kernel.hpp"
+
+namespace rocm_wmma_gemm
+{
+
+#ifndef WMMA_BP_PADDING_A
+#define WMMA_BP_PADDING_A 2
+#endif
+#ifndef WMMA_BP_PADDING_B
+#define WMMA_BP_PADDING_B 2
+#endif
+#ifndef WMMA_BP_PACK_N
+#define WMMA_BP_PACK_N 0
+#endif
+#ifndef WMMA_BP_DOUBLE_BUFFER
+#define WMMA_BP_DOUBLE_BUFFER 0
+#endif
+#ifndef WMMA_BP_DOUBLE_BUFFER_STATIC
+#define WMMA_BP_DOUBLE_BUFFER_STATIC 0
+#endif
+#ifndef WMMA_BP_DOUBLE_BUFFER_LATE
+#define WMMA_BP_DOUBLE_BUFFER_LATE 0
+#endif
+#ifndef WMMA_BP_BLOCK_N
+#define WMMA_BP_BLOCK_N 128
+#endif
+#ifndef WMMA_BP_BLOCK_M
+#define WMMA_BP_BLOCK_M 256
+#endif
+#ifndef WMMA_BP_SWIZZLE
+#define WMMA_BP_SWIZZLE 16
+#endif
+#ifndef WMMA_BP_WAVES_MIN
+#define WMMA_BP_WAVES_MIN 2
+#endif
+#ifndef WMMA_BP_WAVES_MAX
+#define WMMA_BP_WAVES_MAX 8
+#endif
+#ifndef WMMA_BP_SPLIT_BARRIER
+#define WMMA_BP_SPLIT_BARRIER 0
+#endif
+#ifndef WMMA_BP_WAIT_AFTER_BARRIER
+#define WMMA_BP_WAIT_AFTER_BARRIER 0
+#endif
+#ifndef WMMA_BP_NO_EXPLICIT_VMWAIT
+#define WMMA_BP_NO_EXPLICIT_VMWAIT 0
+#endif
+#ifndef WMMA_BP_B_PAIR
+#define WMMA_BP_B_PAIR 0
+#endif
+#ifndef WMMA_BP_K_SLICES
+#define WMMA_BP_K_SLICES 1
+#endif
+#ifndef WMMA_BP_K2_RING
+#define WMMA_BP_K2_RING 0
+#endif
+#ifndef WMMA_BP_PREFETCH_A0_WN
+#define WMMA_BP_PREFETCH_A0_WN 0
+#endif
+#ifndef WMMA_BP_PREFETCH_A1_WN
+#define WMMA_BP_PREFETCH_A1_WN 1
+#endif
+#ifndef WMMA_BP_PREFETCH_B_WN
+#define WMMA_BP_PREFETCH_B_WN 2
+#endif
+#ifndef WMMA_BP_HALF_SWIZZLE
+#define WMMA_BP_HALF_SWIZZLE 0
+#endif
+#ifndef WMMA_BP_WARP_TILE_M
+#define WMMA_BP_WARP_TILE_M 4
+#endif
+
+struct block_prepacked_gemm
+{
+    __global__ __launch_bounds__(
+        (WMMA_BP_BLOCK_M / (WMMA_BP_WARP_TILE_M * wmma_tile))
+        * (WMMA_BP_BLOCK_N / (4 * wmma_tile)) * warp_size)
+        __attribute__((amdgpu_waves_per_eu(WMMA_BP_WAVES_MIN, WMMA_BP_WAVES_MAX))) static void run(
+            half* __restrict__ C,
+            const half* __restrict__ A,
+            const half* __restrict__ B,
+            int M,
+            int N,
+            int K)
+    {
+        constexpr int block_m = WMMA_BP_BLOCK_M;
+        constexpr int block_n = WMMA_BP_BLOCK_N;
+        constexpr int warp_tile_m = WMMA_BP_WARP_TILE_M;
+        constexpr int block_k = WMMA_BP_K_SLICES * wmma_tile;
+        constexpr int stride_a = block_k + WMMA_BP_PADDING_A;
+        constexpr int stride_b = block_k + WMMA_BP_PADDING_B;
+        constexpr int a_tile_elements = block_m * block_k;
+        constexpr int b_tile_elements = block_n * block_k;
+        constexpr int lds_buffers = WMMA_BP_DOUBLE_BUFFER ? 2 : 1;
+        constexpr int warp_cols = block_n / (4 * wmma_tile);
+        static_assert((block_m == 128 || block_m == 256)
+                      && (block_n == 128 || block_n == 256));
+        static_assert(WMMA_BP_K_SLICES == 1 || WMMA_BP_K_SLICES == 2);
+        static_assert(!WMMA_BP_K2_RING
+                          || (WMMA_BP_K_SLICES == 2 && WMMA_BP_PACK_N
+                              && block_m == 256 && block_n == 128
+                              && !WMMA_BP_DOUBLE_BUFFER),
+                      "K2 ring specializes N-packed 256x128 single buffering");
+        using u16x8 = uint16_t __attribute__((ext_vector_type(8)));
+
+        __shared__ half a_lds[lds_buffers * block_m * stride_a];
+        __shared__ half b_lds[lds_buffers * block_n * stride_b];
+
+        const int tid = static_cast<int>(threadIdx.x);
+        const int lane = tid & (warp_size - 1);
+        const int wave = tid / warp_size;
+        const int half_lane = lane & 15;
+        const int half_wave = lane >> 4;
+        const int warp_row = wave / warp_cols;
+        const int warp_col = wave % warp_cols;
+
+        const int grid_m = M / block_m;
+        const int grid_n = N / block_n;
+        int block_row = 0;
+        int block_col = 0;
+        tile_mapper<block_m,
+                    block_n,
+                    m_layout::col_major,
+                    m_layout::row_major,
+                    WMMA_BP_SWIZZLE>()
+            .map_tile(static_cast<int>(blockIdx.x),
+                      grid_m,
+                      grid_n,
+                      &block_row,
+                      &block_col);
+
+        const int block_m_index = block_row / block_m;
+        const int block_n_index = block_col / block_n;
+        const int k_tiles = K / block_k;
+        const half* a_tile = A
+            + static_cast<size_t>(block_m_index) * k_tiles * a_tile_elements;
+        const half* b_tile = B
+            + static_cast<size_t>(block_n_index) * k_tiles * b_tile_elements;
+
+        const int warp_m_base = warp_row * warp_tile_m * wmma_tile;
+        const int warp_n_base = warp_col * 4 * wmma_tile;
+
+        u16x8 next_a0;
+        u16x8 next_a1;
+        u16x8 next_b;
+        u16x8 next_b1;
+        u16x8 next_a_k2[4];
+        u16x8 next_b_k2[2];
+
+        auto prefetch_all = [&](const half* next_a, const half* next_b_ptr)
+        {
+            const u16x8* a_vectors = reinterpret_cast<const u16x8*>(next_a);
+            const u16x8* b_vectors = reinterpret_cast<const u16x8*>(next_b_ptr);
+            if constexpr(block_n == 128)
+            {
+                if constexpr(warp_tile_m == 2)
+                {
+                    next_a0 = a_vectors[tid];
+                    if(lane < 16)
+                        next_b = b_vectors[wave * 16 + lane];
+                }
+                else
+                {
+                    next_a0 = a_vectors[2 * tid];
+                    next_a1 = a_vectors[2 * tid + 1];
+                }
+            }
+            else
+                next_a0 = a_vectors[tid];
+            if constexpr(block_m == 128)
+            {
+                next_b = b_vectors[2 * tid];
+                next_b1 = b_vectors[2 * tid + 1];
+            }
+            else if constexpr(warp_tile_m != 2)
+                next_b = b_vectors[tid];
+        };
+
+        auto commit_all = [&]()
+        {
+            if constexpr(block_n == 128)
+            {
+                if constexpr(warp_tile_m == 2)
+                {
+                    const int a_row = tid >> 1;
+                    const int a_half = (tid & 1) * 8;
+                    *reinterpret_cast<u16x8*>(
+                        a_lds + a_row * stride_a + a_half) = next_a0;
+                }
+                else if constexpr(WMMA_BP_HALF_SWIZZLE)
+                {
+                    const int half_xor = ((tid >> 2) & 1) * 8;
+                    *reinterpret_cast<u16x8*>(
+                        a_lds + tid * stride_a + half_xor) = next_a0;
+                    *reinterpret_cast<u16x8*>(
+                        a_lds + tid * stride_a + (half_xor ^ 8)) = next_a1;
+                }
+                else
+                {
+                    *reinterpret_cast<u16x8*>(a_lds + tid * stride_a) = next_a0;
+                    *reinterpret_cast<u16x8*>(a_lds + tid * stride_a + 8) = next_a1;
+                }
+            }
+            else
+            {
+                const int a_row = tid >> 1;
+                const int a_half = (tid & 1) * 8;
+                *reinterpret_cast<u16x8*>(a_lds + a_row * stride_a + a_half)
+                    = next_a0;
+            }
+            if constexpr(warp_tile_m == 2)
+            {
+                if(lane < 16)
+                {
+                    const int vector = wave * 16 + lane;
+                    const int row = vector >> 1;
+                    const int row_half = (vector & 1) * 8;
+                    *reinterpret_cast<u16x8*>(
+                        b_lds + row * stride_b + row_half) = next_b;
+                }
+            }
+            else
+            {
+                const int b_row = tid >> 1;
+                const int b_half = (tid & 1) * 8;
+                if constexpr(block_m == 128)
+                {
+                    *reinterpret_cast<u16x8*>(b_lds + tid * stride_b) = next_b;
+                    *reinterpret_cast<u16x8*>(b_lds + tid * stride_b + 8) = next_b1;
+                }
+                else
+                {
+                    const int physical_half = WMMA_BP_HALF_SWIZZLE
+                        ? (b_half ^ (((b_row >> 2) & 1) * 8))
+                        : b_half;
+                    *reinterpret_cast<u16x8*>(
+                        b_lds + b_row * stride_b + physical_half) = next_b;
+                }
+            }
+        };
+
+        auto prefetch_k2 = [&](const half* next_a, const half* next_b_ptr)
+        {
+            static_assert(WMMA_BP_K_SLICES == 1
+                          || (block_m == 256 && block_n == 128));
+            const u16x8* a_vectors = reinterpret_cast<const u16x8*>(next_a);
+            const u16x8* b_vectors = reinterpret_cast<const u16x8*>(next_b_ptr);
+            #pragma unroll
+            for(int vector = 0; vector < 4; ++vector)
+                next_a_k2[vector] = a_vectors[4 * tid + vector];
+            #pragma unroll
+            for(int vector = 0; vector < 2; ++vector)
+                next_b_k2[vector] = b_vectors[2 * tid + vector];
+        };
+
+        auto commit_k2 = [&]()
+        {
+            #pragma unroll
+            for(int vector = 0; vector < 4; ++vector)
+            {
+                const int flat = 4 * tid + vector;
+                const int row = flat >> 2;
+                const int row_vector = flat & 3;
+                *reinterpret_cast<u16x8*>(
+                    a_lds + row * stride_a + row_vector * 8) = next_a_k2[vector];
+            }
+            #pragma unroll
+            for(int vector = 0; vector < 2; ++vector)
+            {
+                const int flat = 2 * tid + vector;
+                const int row = flat >> 2;
+                const int row_vector = flat & 3;
+                *reinterpret_cast<u16x8*>(
+                    b_lds + row * stride_b + row_vector * 8) = next_b_k2[vector];
+            }
+        };
+
+        // The K2 ring keeps two K16 slices in one padded K32 LDS tile. The
+        // persistent input contract is [block][K32][slice][row][K16], so each
+        // refill remains one contiguous, coalesced transaction per operand.
+        auto prefetch_ring_slice = [&](const half* next_a,
+                                       const half* next_b_ptr)
+        {
+            const u16x8* a_vectors = reinterpret_cast<const u16x8*>(next_a);
+            const u16x8* b_vectors
+                = reinterpret_cast<const u16x8*>(next_b_ptr);
+            next_a0 = a_vectors[2 * tid];
+            next_a1 = a_vectors[2 * tid + 1];
+            next_b = b_vectors[tid];
+        };
+
+        auto commit_ring_slice = [&](int slot)
+        {
+            const int slot_offset = slot * wmma_tile;
+            *reinterpret_cast<u16x8*>(
+                a_lds + tid * stride_a + slot_offset) = next_a0;
+            *reinterpret_cast<u16x8*>(
+                a_lds + tid * stride_a + slot_offset + 8) = next_a1;
+            const int b_row = tid >> 1;
+            const int b_half = (tid & 1) * 8;
+            *reinterpret_cast<u16x8*>(
+                b_lds + b_row * stride_b + slot_offset + b_half) = next_b;
+        };
+
+        if constexpr(WMMA_BP_K2_RING)
+        {
+            constexpr int a_slice_elements = block_m * wmma_tile;
+            constexpr int b_slice_elements = block_n * wmma_tile;
+            prefetch_ring_slice(a_tile, b_tile);
+            asm volatile("s_waitcnt vmcnt(0)" ::: "memory");
+            commit_ring_slice(0);
+            prefetch_ring_slice(a_tile + a_slice_elements,
+                                b_tile + b_slice_elements);
+            asm volatile("s_waitcnt vmcnt(0)" ::: "memory");
+            commit_ring_slice(1);
+        }
+        else if constexpr(WMMA_BP_K_SLICES == 1)
+            prefetch_all(a_tile, b_tile);
+        else
+            prefetch_k2(a_tile, b_tile);
+        if constexpr(!WMMA_BP_K2_RING)
+        {
+            __builtin_amdgcn_s_waitcnt(0);
+            if constexpr(WMMA_BP_K_SLICES == 1)
+                commit_all();
+            else
+                commit_k2();
+        }
+        __builtin_amdgcn_s_waitcnt(0x7f);
+        __syncthreads();
+
+        fragment<half, wmma_tile> c_m[2][4];
+        fragment<half, wmma_tile> c_n[4][2];
+
+        auto load_half_swizzled = [&](fragment<half, wmma_tile>& frag,
+                                      const half* first_source,
+                                      const half* second_source)
+        {
+            using as3_u16x8_ptr
+                = const u16x8 __attribute__((address_space(3)))*;
+            const auto* first = (as3_u16x8_ptr)(reinterpret_cast<uintptr_t>(
+                first_source));
+            const auto* second = (as3_u16x8_ptr)(reinterpret_cast<uintptr_t>(
+                second_source));
+            auto* packed = reinterpret_cast<u16x8*>(&frag.get());
+            packed[0] = *first;
+            packed[1] = *second;
+        };
+
+        auto compute_tile = [&]<bool do_prefetch>(
+                                const half* next_a, const half* next_b_ptr)
+        {
+            if constexpr(!WMMA_BP_PACK_N)
+            {
+                fragment<half, wmma_tile> b_frag[4];
+                #pragma unroll
+                for(int wn = 0; wn < 4; ++wn)
+                {
+                    const half* source = b_lds
+                        + (warp_n_base + wn * wmma_tile + half_lane) * stride_b;
+                    load_matrix<m_input::matrix_b, m_layout::col_major>(
+                        b_frag[wn], source, block_k, stride_b);
+                }
+
+                #pragma unroll
+                for(int wm = 0; wm < 4; ++wm)
+                {
+                    if constexpr(do_prefetch)
+                    {
+                        const u16x8* a_vectors
+                            = reinterpret_cast<const u16x8*>(next_a);
+                        const u16x8* b_vectors
+                            = reinterpret_cast<const u16x8*>(next_b_ptr);
+                        if constexpr(block_m == 256 && block_n == 128)
+                        {
+                            if(wm == 0)
+                                next_a0 = a_vectors[2 * tid];
+                            else if(wm == 1)
+                                next_a1 = a_vectors[2 * tid + 1];
+                            else if(wm == 2)
+                                next_b = b_vectors[tid];
+                        }
+                        else if constexpr(block_m == 256 && block_n == 256)
+                        {
+                            if(wm == 0)
+                                next_a0 = a_vectors[tid];
+                            else if(wm == 1)
+                                next_b = b_vectors[tid];
+                        }
+                        else if constexpr(block_m == 128 && block_n == 256)
+                        {
+                            if(wm == 0)
+                                next_a0 = a_vectors[tid];
+                            else if(wm == 1)
+                                next_b = b_vectors[2 * tid];
+                            else if(wm == 2)
+                                next_b1 = b_vectors[2 * tid + 1];
+                        }
+                        else if constexpr(block_m == 128 && block_n == 128)
+                        {
+                            if(wm == 0)
+                                next_a0 = a_vectors[2 * tid];
+                            else if(wm == 1)
+                                next_a1 = a_vectors[2 * tid + 1];
+                            else if(wm == 2)
+                                next_b = b_vectors[2 * tid];
+                            else if(wm == 3)
+                                next_b1 = b_vectors[2 * tid + 1];
+                        }
+                    }
+
+                    fragment<half, wmma_tile> a_frag;
+                    const half* source = a_lds
+                        + (warp_m_base + wm * wmma_tile + half_lane) * stride_a;
+                    load_matrix<m_input::matrix_a, m_layout::row_major>(
+                        a_frag, source, stride_a, block_k);
+
+                    #pragma unroll
+                    for(int wn = 0; wn < 4; ++wn)
+                    {
+                        if(wm < 2)
+                            wmma<false>(a_frag, b_frag[wn], c_m[wm][wn]);
+                        else
+                            wmma<true>(a_frag, b_frag[wn], c_m[wm - 2][wn]);
+                    }
+                }
+            }
+            else
+            {
+                const int half_xor = ((half_lane >> 2) & 1) * 8;
+                const half* a_first_base = a_lds
+                    + (warp_m_base + half_lane) * stride_a + half_xor;
+                const half* a_second_base = a_lds
+                    + (warp_m_base + half_lane) * stride_a + (half_xor ^ 8);
+                const half* b_first_base = b_lds
+                    + (warp_n_base + half_lane) * stride_b + half_xor;
+                const half* b_second_base = b_lds
+                    + (warp_n_base + half_lane) * stride_b + (half_xor ^ 8);
+                fragment<half, wmma_tile> a_frag[4];
+                #pragma unroll
+                for(int wm = 0; wm < warp_tile_m; ++wm)
+                {
+                    const half* source = a_lds
+                        + (warp_m_base + wm * wmma_tile + half_lane) * stride_a;
+                    if constexpr(WMMA_BP_HALF_SWIZZLE)
+                        load_half_swizzled(
+                            a_frag[wm],
+                            a_first_base + wm * wmma_tile * stride_a,
+                            a_second_base + wm * wmma_tile * stride_a);
+                    else
+                        load_matrix<m_input::matrix_a, m_layout::row_major>(
+                            a_frag[wm], source, stride_a, block_k);
+                }
+
+                if constexpr(WMMA_BP_B_PAIR)
+                {
+                    #pragma unroll
+                    for(int pair = 0; pair < 2; ++pair)
+                    {
+                        fragment<half, wmma_tile> b_frag[2];
+                        #pragma unroll
+                        for(int local_n = 0; local_n < 2; ++local_n)
+                        {
+                            const int wn = pair * 2 + local_n;
+                            const half* source = b_lds
+                                + (warp_n_base + wn * wmma_tile + half_lane)
+                                      * stride_b;
+                            load_matrix<m_input::matrix_b, m_layout::col_major>(
+                                b_frag[local_n], source, block_k, stride_b);
+                        }
+
+                        if constexpr(do_prefetch)
+                        {
+                            const u16x8* a_vectors
+                                = reinterpret_cast<const u16x8*>(next_a);
+                            const u16x8* b_vectors
+                                = reinterpret_cast<const u16x8*>(next_b_ptr);
+                            if(pair == 0)
+                            {
+                                next_a0 = a_vectors[2 * tid];
+                                next_a1 = a_vectors[2 * tid + 1];
+                            }
+                            else
+                                next_b = b_vectors[tid];
+                        }
+
+                        #pragma unroll
+                        for(int local_n = 0; local_n < 2; ++local_n)
+                        {
+                            const int wn = pair * 2 + local_n;
+                            #pragma unroll
+                            for(int wm = 0; wm < 4; ++wm)
+                            {
+                                if(wn < 2)
+                                    wmma<false>(
+                                        a_frag[wm], b_frag[local_n], c_n[wm][wn]);
+                                else
+                                    wmma<true>(
+                                        a_frag[wm], b_frag[local_n], c_n[wm][wn - 2]);
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    #pragma unroll
+                    for(int wn = 0; wn < 4; ++wn)
+                    {
+                        if constexpr(do_prefetch)
+                        {
+                            const u16x8* a_vectors
+                                = reinterpret_cast<const u16x8*>(next_a);
+                            const u16x8* b_vectors
+                                = reinterpret_cast<const u16x8*>(next_b_ptr);
+                            if constexpr(block_m == 256 && block_n == 128)
+                            {
+                                if constexpr(warp_tile_m == 2)
+                                {
+                                    if(wn == 0)
+                                        next_a0 = a_vectors[tid];
+                                    if(wn == 1 && lane < 16)
+                                        next_b = b_vectors[wave * 16 + lane];
+                                }
+                                else
+                                {
+                                    if(wn == WMMA_BP_PREFETCH_A0_WN)
+                                        next_a0 = a_vectors[2 * tid];
+                                    if(wn == WMMA_BP_PREFETCH_A1_WN)
+                                        next_a1 = a_vectors[2 * tid + 1];
+                                    if(wn == WMMA_BP_PREFETCH_B_WN)
+                                        next_b = b_vectors[tid];
+                                }
+                            }
+                            else if constexpr(block_m == 256 && block_n == 256)
+                            {
+                                if(wn == 0)
+                                    next_a0 = a_vectors[tid];
+                                else if(wn == 1)
+                                    next_b = b_vectors[tid];
+                            }
+                            else if constexpr(block_m == 128 && block_n == 256)
+                            {
+                                if(wn == 0)
+                                    next_a0 = a_vectors[tid];
+                                else if(wn == 1)
+                                    next_b = b_vectors[2 * tid];
+                                else if(wn == 2)
+                                    next_b1 = b_vectors[2 * tid + 1];
+                            }
+                            else if constexpr(block_m == 128 && block_n == 128)
+                            {
+                                if(wn == 0)
+                                    next_a0 = a_vectors[2 * tid];
+                                else if(wn == 1)
+                                    next_a1 = a_vectors[2 * tid + 1];
+                                else if(wn == 2)
+                                    next_b = b_vectors[2 * tid];
+                                else if(wn == 3)
+                                    next_b1 = b_vectors[2 * tid + 1];
+                            }
+                        }
+
+                        fragment<half, wmma_tile> b_frag;
+                        const half* source = b_lds
+                            + (warp_n_base + wn * wmma_tile + half_lane) * stride_b;
+                        if constexpr(WMMA_BP_HALF_SWIZZLE)
+                            load_half_swizzled(
+                                b_frag,
+                                b_first_base + wn * wmma_tile * stride_b,
+                                b_second_base + wn * wmma_tile * stride_b);
+                        else
+                            load_matrix<m_input::matrix_b, m_layout::col_major>(
+                                b_frag, source, block_k, stride_b);
+
+                        #pragma unroll
+                        for(int wm = 0; wm < warp_tile_m; ++wm)
+                        {
+                            if(wn < 2)
+                                wmma<false>(a_frag[wm], b_frag, c_n[wm][wn]);
+                            else
+                                wmma<true>(a_frag[wm], b_frag, c_n[wm][wn - 2]);
+                        }
+                    }
+                }
+            }
+        };
+
+        auto compute_k2 = [&]<bool do_prefetch>(
+                              const half* next_a, const half* next_b_ptr)
+        {
+            static_assert(WMMA_BP_K_SLICES == 1
+                              || (WMMA_BP_PACK_N && block_m == 256
+                                  && block_n == 128 && !WMMA_BP_DOUBLE_BUFFER),
+                          "K2 currently specializes the N-packed 256x128 single buffer");
+            #pragma unroll
+            for(int slice = 0; slice < 2; ++slice)
+            {
+                fragment<half, wmma_tile> a_frag[4];
+                #pragma unroll
+                for(int wm = 0; wm < 4; ++wm)
+                {
+                    const half* source = a_lds
+                        + (warp_m_base + wm * wmma_tile + half_lane) * stride_a
+                        + slice * wmma_tile;
+                    load_matrix<m_input::matrix_a, m_layout::row_major>(
+                        a_frag[wm], source, stride_a, block_k);
+                }
+
+                #pragma unroll
+                for(int wn = 0; wn < 4; ++wn)
+                {
+                    if constexpr(do_prefetch)
+                    {
+                        const int step = slice * 4 + wn;
+                        const u16x8* a_vectors
+                            = reinterpret_cast<const u16x8*>(next_a);
+                        const u16x8* b_vectors
+                            = reinterpret_cast<const u16x8*>(next_b_ptr);
+                        if(step < 4)
+                            next_a_k2[step] = a_vectors[4 * tid + step];
+                        else if(step < 6)
+                            next_b_k2[step - 4] = b_vectors[2 * tid + step - 4];
+                    }
+
+                    fragment<half, wmma_tile> b_frag;
+                    const half* source = b_lds
+                        + (warp_n_base + wn * wmma_tile + half_lane) * stride_b
+                        + slice * wmma_tile;
+                    load_matrix<m_input::matrix_b, m_layout::col_major>(
+                        b_frag, source, block_k, stride_b);
+
+                    #pragma unroll
+                    for(int wm = 0; wm < 4; ++wm)
+                    {
+                        if(wn < 2)
+                            wmma<false>(a_frag[wm], b_frag, c_n[wm][wn]);
+                        else
+                            wmma<true>(a_frag[wm], b_frag, c_n[wm][wn - 2]);
+                    }
+                }
+            }
+        };
+
+        auto compute_ring = [&]<bool do_prefetch>(
+                                int slot,
+                                const half* next_a,
+                                const half* next_b_ptr)
+        {
+            const int slot_offset = slot * wmma_tile;
+            fragment<half, wmma_tile> a_frag[4];
+            #pragma unroll
+            for(int wm = 0; wm < 4; ++wm)
+            {
+                const half* source = a_lds
+                    + (warp_m_base + wm * wmma_tile + half_lane) * stride_a
+                    + slot_offset;
+                load_matrix<m_input::matrix_a, m_layout::row_major>(
+                    a_frag[wm], source, stride_a, block_k);
+            }
+
+            #pragma unroll
+            for(int wn = 0; wn < 4; ++wn)
+            {
+                if constexpr(do_prefetch)
+                {
+                    const u16x8* a_vectors
+                        = reinterpret_cast<const u16x8*>(next_a);
+                    const u16x8* b_vectors
+                        = reinterpret_cast<const u16x8*>(next_b_ptr);
+                    if(wn == WMMA_BP_PREFETCH_A0_WN)
+                        next_a0 = a_vectors[2 * tid];
+                    if(wn == WMMA_BP_PREFETCH_A1_WN)
+                        next_a1 = a_vectors[2 * tid + 1];
+                    if(wn == WMMA_BP_PREFETCH_B_WN)
+                        next_b = b_vectors[tid];
+                }
+
+                fragment<half, wmma_tile> b_frag;
+                const half* source = b_lds
+                    + (warp_n_base + wn * wmma_tile + half_lane) * stride_b
+                    + slot_offset;
+                load_matrix<m_input::matrix_b, m_layout::col_major>(
+                    b_frag, source, block_k, stride_b);
+                #pragma unroll
+                for(int wm = 0; wm < 4; ++wm)
+                {
+                    if(wn < 2)
+                        wmma<false>(a_frag[wm], b_frag, c_n[wm][wn]);
+                    else
+                        wmma<true>(a_frag[wm], b_frag, c_n[wm][wn - 2]);
+                }
+            }
+        };
+
+        if constexpr(WMMA_BP_K2_RING)
+        {
+            constexpr int a_slice_elements = block_m * wmma_tile;
+            constexpr int b_slice_elements = block_n * wmma_tile;
+            constexpr int total_slices_per_tile = 2;
+            const int total_slices = K / wmma_tile;
+            for(int slice = 0; slice < total_slices - 2; ++slice)
+            {
+                const int next_slice = slice + 2;
+                const int next_tile = next_slice / total_slices_per_tile;
+                const int next_slot = next_slice & 1;
+                const half* next_a = a_tile
+                    + next_tile * a_tile_elements
+                    + next_slot * a_slice_elements;
+                const half* next_b_ptr = b_tile
+                    + next_tile * b_tile_elements
+                    + next_slot * b_slice_elements;
+                compute_ring.template operator()<true>(
+                    slice & 1, next_a, next_b_ptr);
+                asm volatile("s_waitcnt vmcnt(0)" ::: "memory");
+                asm volatile("s_waitcnt lgkmcnt(0)" ::: "memory");
+                __syncthreads();
+                commit_ring_slice(slice & 1);
+            }
+            compute_ring.template operator()<false>(
+                (total_slices - 2) & 1, nullptr, nullptr);
+            asm volatile("s_waitcnt lgkmcnt(0)" ::: "memory");
+            __syncthreads();
+            compute_ring.template operator()<false>(
+                (total_slices - 1) & 1, nullptr, nullptr);
+        }
+        else if constexpr(WMMA_BP_K_SLICES == 2)
+        {
+            for(int k_tile = 0; k_tile < k_tiles - 1; ++k_tile)
+            {
+                const half* next_a = a_tile + (k_tile + 1) * a_tile_elements;
+                const half* next_b_ptr = b_tile + (k_tile + 1) * b_tile_elements;
+                compute_k2.template operator()<true>(next_a, next_b_ptr);
+                asm volatile("s_waitcnt vmcnt(0)" ::: "memory");
+                __syncthreads();
+                commit_k2();
+                __builtin_amdgcn_s_waitcnt(0x7f);
+                __syncthreads();
+            }
+            compute_k2.template operator()<false>(nullptr, nullptr);
+        }
+        else if constexpr(!WMMA_BP_DOUBLE_BUFFER)
+        {
+            #pragma unroll 1
+            for(int k_tile = 0; k_tile < k_tiles - 1; ++k_tile)
+            {
+                const half* next_a = a_tile + (k_tile + 1) * a_tile_elements;
+                const half* next_b_ptr = b_tile + (k_tile + 1) * b_tile_elements;
+                compute_tile.template operator()<true>(next_a, next_b_ptr);
+
+                if constexpr(WMMA_BP_SPLIT_BARRIER)
+                {
+                    asm volatile("s_barrier_signal -1" ::: "memory");
+                    asm volatile("s_waitcnt vmcnt(0)" ::: "memory");
+                    asm volatile("s_barrier_wait -1" ::: "memory");
+                }
+                else if constexpr(WMMA_BP_WAIT_AFTER_BARRIER)
+                {
+                    __syncthreads();
+                    asm volatile("s_waitcnt vmcnt(0)" ::: "memory");
+                }
+                else if constexpr(WMMA_BP_NO_EXPLICIT_VMWAIT)
+                    __syncthreads();
+                else
+                {
+                    asm volatile("s_waitcnt vmcnt(0)" ::: "memory");
+                    __syncthreads();
+                }
+                commit_all();
+                __builtin_amdgcn_s_waitcnt(0x7f);
+                __syncthreads();
+            }
+            compute_tile.template operator()<false>(nullptr, nullptr);
+        }
+        else if constexpr(WMMA_BP_DOUBLE_BUFFER_LATE)
+        {
+            static_assert(WMMA_BP_PACK_N && block_m == 256 && block_n == 128,
+                          "late-refill double buffer specializes N-packed 256x128");
+            auto compute_late = [&]<int buffer>()
+            {
+                fragment<half, wmma_tile> a_frag[4];
+                #pragma unroll
+                for(int wm = 0; wm < 4; ++wm)
+                {
+                    const half* source = a_lds + buffer * block_m * stride_a
+                        + (warp_m_base + wm * wmma_tile + half_lane) * stride_a;
+                    load_matrix<m_input::matrix_a, m_layout::row_major>(
+                        a_frag[wm], source, stride_a, block_k);
+                }
+
+                #pragma unroll
+                for(int wn = 0; wn < 4; ++wn)
+                {
+                    fragment<half, wmma_tile> b_frag;
+                    const half* source = b_lds + buffer * block_n * stride_b
+                        + (warp_n_base + wn * wmma_tile + half_lane) * stride_b;
+                    load_matrix<m_input::matrix_b, m_layout::col_major>(
+                        b_frag, source, block_k, stride_b);
+                    #pragma unroll
+                    for(int wm = 0; wm < 4; ++wm)
+                    {
+                        if(wn < 2)
+                            wmma<false>(a_frag[wm], b_frag, c_n[wm][wn]);
+                        else
+                            wmma<true>(a_frag[wm], b_frag, c_n[wm][wn - 2]);
+                    }
+                }
+            };
+
+            auto refill_late = [&]<int next_buffer>(const half* next_a,
+                                                    const half* next_b_ptr)
+            {
+                const u16x8* a_vectors = reinterpret_cast<const u16x8*>(next_a);
+                const u16x8* b_vectors
+                    = reinterpret_cast<const u16x8*>(next_b_ptr);
+                next_a0 = a_vectors[2 * tid];
+                next_a1 = a_vectors[2 * tid + 1];
+                next_b = b_vectors[tid];
+                asm volatile("s_waitcnt vmcnt(0)" ::: "memory");
+                *reinterpret_cast<u16x8*>(
+                    a_lds + next_buffer * block_m * stride_a
+                        + tid * stride_a) = next_a0;
+                *reinterpret_cast<u16x8*>(
+                    a_lds + next_buffer * block_m * stride_a
+                        + tid * stride_a + 8) = next_a1;
+                const int b_row = tid >> 1;
+                const int b_half = (tid & 1) * 8;
+                *reinterpret_cast<u16x8*>(
+                    b_lds + next_buffer * block_n * stride_b
+                        + b_row * stride_b + b_half) = next_b;
+            };
+
+            int k_tile = 0;
+            for(; k_tile + 2 < k_tiles; k_tile += 2)
+            {
+                compute_late.template operator()<0>();
+                refill_late.template operator()<1>(
+                    a_tile + (k_tile + 1) * a_tile_elements,
+                    b_tile + (k_tile + 1) * b_tile_elements);
+                __builtin_amdgcn_s_waitcnt(0x7f);
+                __syncthreads();
+
+                compute_late.template operator()<1>();
+                refill_late.template operator()<0>(
+                    a_tile + (k_tile + 2) * a_tile_elements,
+                    b_tile + (k_tile + 2) * b_tile_elements);
+                __builtin_amdgcn_s_waitcnt(0x7f);
+                __syncthreads();
+            }
+
+            compute_late.template operator()<0>();
+            if(k_tile < k_tiles - 1)
+            {
+                refill_late.template operator()<1>(
+                    a_tile + (k_tile + 1) * a_tile_elements,
+                    b_tile + (k_tile + 1) * b_tile_elements);
+                __builtin_amdgcn_s_waitcnt(0x7f);
+                __syncthreads();
+                compute_late.template operator()<1>();
+            }
+        }
+        else
+        {
+            static_assert(!WMMA_BP_DOUBLE_BUFFER
+                              || (block_m == 256 && block_n == 128),
+                          "double-buffer block prepack currently uses a 256x128 block");
+            int current_buffer = 0;
+
+            auto compute_double = [&]<bool do_prefetch>(
+                                      const half* next_a,
+                                      const half* next_b_ptr,
+                                      int current_buffer_for_step,
+                                      int next_buffer)
+            {
+                static_assert(!WMMA_BP_DOUBLE_BUFFER || !WMMA_BP_PACK_N
+                                  || WMMA_BP_DOUBLE_BUFFER_LATE,
+                              "double-buffer block prepack currently packs C along M");
+                fragment<half, wmma_tile> b_frag[4];
+                #pragma unroll
+                for(int wn = 0; wn < 4; ++wn)
+                {
+                    const half* source = b_lds
+                        + current_buffer_for_step * block_n * stride_b
+                        + (warp_n_base + wn * wmma_tile + half_lane) * stride_b;
+                    load_matrix<m_input::matrix_b, m_layout::col_major>(
+                        b_frag[wn], source, block_k, stride_b);
+                }
+
+                u16x8 staged;
+                #pragma unroll
+                for(int wm = 0; wm < 4; ++wm)
+                {
+                    if constexpr(do_prefetch)
+                    {
+                        if(wm == 0)
+                        {
+                            const u16x8* vectors
+                                = reinterpret_cast<const u16x8*>(next_a);
+                            staged = vectors[2 * tid];
+                        }
+                        else if(wm == 1)
+                        {
+                            const u16x8* vectors
+                                = reinterpret_cast<const u16x8*>(next_a);
+                            staged = vectors[2 * tid + 1];
+                        }
+                        else if(wm == 2)
+                        {
+                            const u16x8* vectors
+                                = reinterpret_cast<const u16x8*>(next_b_ptr);
+                            staged = vectors[tid];
+                        }
+                    }
+
+                    fragment<half, wmma_tile> a_frag;
+                    const half* source = a_lds
+                        + current_buffer_for_step * block_m * stride_a
+                        + (warp_m_base + wm * wmma_tile + half_lane) * stride_a;
+                    load_matrix<m_input::matrix_a, m_layout::row_major>(
+                        a_frag, source, stride_a, block_k);
+
+                    #pragma unroll
+                    for(int wn = 0; wn < 4; ++wn)
+                    {
+                        if(wm < 2)
+                            wmma<false>(a_frag, b_frag[wn], c_m[wm][wn]);
+                        else
+                            wmma<true>(a_frag, b_frag[wn], c_m[wm - 2][wn]);
+                    }
+
+                    if constexpr(do_prefetch)
+                    {
+                        if(wm < 3)
+                        {
+                            asm volatile("s_waitcnt vmcnt(0)" ::: "memory");
+                            if(wm == 0)
+                                *reinterpret_cast<u16x8*>(
+                                    a_lds + next_buffer * block_m * stride_a
+                                        + tid * stride_a) = staged;
+                            else if(wm == 1)
+                                *reinterpret_cast<u16x8*>(
+                                    a_lds + next_buffer * block_m * stride_a
+                                        + tid * stride_a + 8) = staged;
+                            else
+                            {
+                                const int b_row = tid >> 1;
+                                const int b_half = (tid & 1) * 8;
+                                *reinterpret_cast<u16x8*>(
+                                    b_lds + next_buffer * block_n * stride_b
+                                        + b_row * stride_b + b_half) = staged;
+                            }
+                        }
+                    }
+                }
+            };
+
+            if constexpr(WMMA_BP_DOUBLE_BUFFER_STATIC)
+            {
+                int k_tile = 0;
+                for(; k_tile + 2 < k_tiles; k_tile += 2)
+                {
+                    compute_double.template operator()<true>(
+                        a_tile + (k_tile + 1) * a_tile_elements,
+                        b_tile + (k_tile + 1) * b_tile_elements,
+                        0,
+                        1);
+                    __builtin_amdgcn_s_waitcnt(0x7f);
+                    __syncthreads();
+
+                    compute_double.template operator()<true>(
+                        a_tile + (k_tile + 2) * a_tile_elements,
+                        b_tile + (k_tile + 2) * b_tile_elements,
+                        1,
+                        0);
+                    __builtin_amdgcn_s_waitcnt(0x7f);
+                    __syncthreads();
+                }
+
+                if(k_tile < k_tiles - 1)
+                {
+                    compute_double.template operator()<true>(
+                        a_tile + (k_tile + 1) * a_tile_elements,
+                        b_tile + (k_tile + 1) * b_tile_elements,
+                        0,
+                        1);
+                    __builtin_amdgcn_s_waitcnt(0x7f);
+                    __syncthreads();
+                    current_buffer = 1;
+                }
+                compute_double.template operator()<false>(
+                    nullptr, nullptr, current_buffer, 0);
+            }
+            else
+            {
+                for(int k_tile = 0; k_tile < k_tiles - 1; ++k_tile)
+                {
+                    const half* next_a = a_tile + (k_tile + 1) * a_tile_elements;
+                    const half* next_b_ptr = b_tile + (k_tile + 1) * b_tile_elements;
+                    compute_double.template operator()<true>(
+                        next_a, next_b_ptr, current_buffer, 1 - current_buffer);
+                    __builtin_amdgcn_s_waitcnt(0x7f);
+                    __syncthreads();
+                    current_buffer = 1 - current_buffer;
+                }
+                compute_double.template operator()<false>(
+                    nullptr, nullptr, current_buffer, 0);
+            }
+        }
+
+        #pragma unroll
+        for(int wm = 0; wm < warp_tile_m; ++wm)
+        {
+            #pragma unroll
+            for(int wn = 0; wn < 4; ++wn)
+            {
+                if constexpr(!WMMA_BP_PACK_N)
+                {
+                    if(wm < 2)
+                        store_matrix<m_layout::row_major, false, false>(
+                            C,
+                            c_m[wm][wn],
+                            block_row + warp_m_base + wm * wmma_tile + half_wave,
+                            block_col + warp_n_base + wn * wmma_tile + half_lane,
+                            M,
+                            N);
+                    else
+                        store_matrix<m_layout::row_major, false, true>(
+                            C,
+                            c_m[wm - 2][wn],
+                            block_row + warp_m_base + wm * wmma_tile + half_wave,
+                            block_col + warp_n_base + wn * wmma_tile + half_lane,
+                            M,
+                            N);
+                }
+                else
+                {
+                    if(wn < 2)
+                        store_matrix<m_layout::row_major, false, false>(
+                            C,
+                            c_n[wm][wn],
+                            block_row + warp_m_base + wm * wmma_tile + half_wave,
+                            block_col + warp_n_base + wn * wmma_tile + half_lane,
+                            M,
+                            N);
+                    else
+                        store_matrix<m_layout::row_major, false, true>(
+                            C,
+                            c_n[wm][wn - 2],
+                            block_row + warp_m_base + wm * wmma_tile + half_wave,
+                            block_col + warp_n_base + wn * wmma_tile + half_lane,
+                            M,
+                            N);
+                }
+            }
+        }
+    }
+};
+
+} // namespace rocm_wmma_gemm
+
+#endif
