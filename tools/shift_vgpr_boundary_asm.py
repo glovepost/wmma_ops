@@ -6,26 +6,32 @@ import re
 import sys
 
 
-BOUNDARY = 65
+DEFAULT_BOUNDARY = 65
 ORIGINAL_NEXT_FREE = 118
 
 
 def main() -> int:
-    if len(sys.argv) != 4:
-        print(f"usage: {sys.argv[0]} INPUT.s OUTPUT.s DELTA", file=sys.stderr)
+    if len(sys.argv) not in (4, 5):
+        print(
+            f"usage: {sys.argv[0]} INPUT.s OUTPUT.s DELTA [BOUNDARY]",
+            file=sys.stderr,
+        )
         return 2
     delta = int(sys.argv[3])
     if delta not in (2, 4, 6):
         raise ValueError("DELTA must be one of 2, 4, or 6")
+    boundary = int(sys.argv[4]) if len(sys.argv) == 5 else DEFAULT_BOUNDARY
+    if boundary not in range(1, ORIGINAL_NEXT_FREE + 1):
+        raise ValueError("BOUNDARY is outside the allocated VGPR range")
 
     source = Path(sys.argv[1]).read_text()
 
     def shift_range(match: re.Match[str]) -> str:
         first = int(match.group(1))
         last = int(match.group(2))
-        if first < BOUNDARY <= last:
+        if first < boundary <= last:
             raise ValueError(f"VGPR range crosses shift boundary: {match.group(0)}")
-        if first >= BOUNDARY:
+        if first >= boundary:
             first += delta
             last += delta
         return f"v[{first}:{last}]"
@@ -34,7 +40,7 @@ def main() -> int:
 
     def shift_scalar(match: re.Match[str]) -> str:
         register = int(match.group(1))
-        if register >= BOUNDARY:
+        if register >= boundary:
             register += delta
         return f"v{register}"
 

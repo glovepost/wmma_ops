@@ -376,6 +376,13 @@ averaged 49.035 TFLOPS against 48.103/47.941 bracketing controls, +2.11% over
 their average and +0.87% over the former 48.614-TFLOPS leader. This promotes
 delta 2 as the research base and leaves a 1.97% sustained gap to 50 TFLOPS.
 
+Moving the same two-register gap to other safe live-range boundaries did not
+improve it. In a lower package state, opening/closing v65 controls reached
+45.510/45.302 TFLOPS. Boundaries v17/v33/v49/v57/v66/v68/v69/v70 reached
+44.430/44.461/44.464/44.848/45.150/44.420/44.513/44.607, all exact. Treat this
+only as a same-pass relative screen: v66 was closest at -0.56%, while all other
+cuts lost 1.2--2.2%. The promoted phase group starts at v65.
+
 At 256 GB/s, the corresponding compute-to-memory ridge point is about
 232 FLOP/byte (`59.4e12 / 256e9`), not 106 FLOP/byte. Both inputs should be
 replaced by observed clocks and sustained bandwidth when making a measured

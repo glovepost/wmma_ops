@@ -738,6 +738,16 @@ leader. It is not a 50-TFLOPS result; the remaining sustained gap is 1.97%.
 The delta-4/6 collapse despite 24 reported waves also makes the mechanism
 clearer: physical WMMA register phase dominates the nominal occupancy change.
 
+A follow-up held delta 2 constant and moved the insertion boundary across every
+safe live-range cut at v17/v33/v49/v57/v66/v68/v69/v70. The host entered a
+lower package state in this pass: opening/closing v65 controls reached only
+45.510/45.302 TFLOPS, so these absolute values must not be compared with the
+49.035 qualification. Same-pass results were
+44.430/44.461/44.464/44.848/45.150/44.420/44.513/44.607 TFLOPS in boundary
+order. All were exact. V66 came closest but remained 0.56% below the control
+midpoint; every other cut lost 1.2--2.2%. The winning transformation therefore
+includes v65 and all later address/fragment registers as one phase group.
+
 ## Decision
 
 The correct block/K-major p8 kernel with progressive refill, scalar-offset

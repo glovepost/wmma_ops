@@ -25,9 +25,39 @@ for delta in 2 4 6; do
         "traces/bp-register-phase-d${delta}.s" "${delta}"
 done
 
+for boundary in 17 33 49 57 66 68 69 70; do
+    python3 tools/shift_vgpr_boundary_asm.py \
+        traces/bp-register-phase-base.s \
+        "traces/bp-register-boundary-b${boundary}-d2.s" 2 "${boundary}"
+done
+
 llvm=/opt/rocm/llvm/bin
 for delta in 2 4 6; do
     candidate="bp-register-phase-d${delta}"
+    "${llvm}/clang" -target amdgcn-amd-amdhsa -mcpu=gfx1151 \
+        -mcode-object-version=6 -c "traces/${candidate}.s" \
+        -o "traces/${candidate}.o"
+    "${llvm}/lld" -flavor gnu -m elf64_amdgpu --no-undefined -shared \
+        -o "traces/${candidate}.out" "traces/${candidate}.o"
+    "${llvm}/clang-offload-bundler" -type=o -bundle-align=4096 \
+        -targets=host-x86_64-unknown-linux-gnu,hipv4-amdgcn-amd-amdhsa--gfx1151 \
+        -input=/dev/null -input="traces/${candidate}.out" \
+        -output="traces/${candidate}.hipfb"
+
+    hipcc --offload-host-only "${common[@]}" \
+        -Xclang -fcuda-include-gpubinary \
+        -Xclang "traces/${candidate}.hipfb" \
+        -c rocwmma_half_record.hip -o "traces/${candidate}-host.o"
+    hipcc "traces/${candidate}-host.o" -lrocblas -o "${candidate}"
+
+    echo "${candidate}:"
+    grep -E '^    \.(group_segment_fixed_size|private_segment_fixed_size|sgpr_count|sgpr_spill_count|vgpr_count|vgpr_spill_count):' \
+        "traces/${candidate}.s"
+done
+
+
+for boundary in 17 33 49 57 66 68 69 70; do
+    candidate="bp-register-boundary-b${boundary}-d2"
     "${llvm}/clang" -target amdgcn-amd-amdhsa -mcpu=gfx1151 \
         -mcode-object-version=6 -c "traces/${candidate}.s" \
         -o "traces/${candidate}.o"

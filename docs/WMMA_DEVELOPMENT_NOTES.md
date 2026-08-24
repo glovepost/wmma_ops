@@ -3548,3 +3548,25 @@ Promote the delta-2 phase as the new prepacked-contract research base. It does
 not meet the 50-TFLOPS goal: the sustained gap is 1.97%. The delta-4/6 failure
 despite 24 reported waves is equally important--this uplift is a physical
 WMMA register-phase effect, not an occupancy result.
+
+The next isolation kept the two-register gap but moved its boundary across all
+safe cuts in the generated live ranges. This pass ran in a much lower package
+state, so only same-pass deltas are meaningful:
+
+| Shift boundary | TFLOPS | Delta vs 45.406 control midpoint |
+|---:|---:|---:|
+| v17 | 44.430 | -2.15% |
+| v33 | 44.461 | -2.08% |
+| v49 | 44.464 | -2.07% |
+| v57 | 44.848 | -1.23% |
+| v66 | 45.150 | -0.56% |
+| v68 | 44.420 | -2.17% |
+| v69 | 44.513 | -1.97% |
+| v70 | 44.607 | -1.76% |
+
+The v65 delta-2 controls opened at 45.510 and closed at 45.302 TFLOPS; do not
+compare this throttled bracket's absolute values with the 49.035 record screen.
+Every boundary candidate remained exact at 120 VGPR and 16 reported waves.
+None improves v65, establishing that the winning group includes v65 itself and
+all later address/fragment/refill registers. The near-neutral v66 result
+isolates physical v65 placement as a small but measurable part of the gain.
