@@ -3958,3 +3958,10 @@ blocks/16 waves, but five medians measured 44.551, 44.539, 44.333, 44.391, and
 44.246 TFLOPS (44.412 average, 44.246 floor). This distinct one-sided
 producer/consumer schedule is numerically sound but below the retained leader;
 its extra A handoff work closes the hybrid-A route for the square shape.
+
+The late-B1 specialization was also built with its required 128x128,
+single-buffer ownership geometry. It passed the exact reference tuple in all
+five launches and reported four blocks/16 waves, but medians were 41.166,
+40.840, 40.764, 40.721, and 40.902 TFLOPS (40.879 average, 40.721 floor).
+The smaller tile's traversal/refill cost dominates, so late-B1 is closed as a
+route to the 50-TFLOPS target.

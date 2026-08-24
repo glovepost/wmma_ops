@@ -1023,6 +1023,16 @@ launches passed the exact tuple, but medians were **44.551, 44.539, 44.333,
 handoff work outweighs the overlap; this hybrid schedule is closed for the
 square record shape.
 
+### 2026-08-24 late-B1 128x128 ownership screen
+
+The late-B1 prefetch specialization was built with its required 128x128
+single-buffer tile (`WMMA_BP_LATE_B1_PREFETCH=1`, two M-waves and two N-waves).
+All five launches passed the full exactness tuple and reported four active
+blocks/16 waves per CU. Medians were **41.166, 40.840, 40.764, 40.721, and
+40.902 TFLOPS** (40.879 average, 40.721 floor). The smaller tile's additional
+block traversal and refill work outweigh the late B overlap; this ownership
+specialization is closed well below the 256x128 leader.
+
 The companion `WMMA_BP_HALF_SWIZZLE=1` layout was also screened on the same
 256x128 packed shape. It passed the complete exactness tuple at unchanged
 two-block occupancy, but reached only 38.402 TFLOPS. Half-word LDS swizzling is
