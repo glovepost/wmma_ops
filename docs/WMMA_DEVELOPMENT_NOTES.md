@@ -3916,3 +3916,20 @@ this layout family is closed.
 An explicit VMEM wait before copying the high-register B vector was also
 tested; it remained wrong at 49.274 TFLOPS. The early-B image is closed rather
 than treated as a performance result.
+
+### 2026-08-24: MAC-cluster priority experiment
+
+The next new schedule hypothesis used the gfx11 `s_setprio` control around the
+existing hand-scheduled WMMA cluster. `tools/patch_setprio_asm.py` inserts a
+priority raise at the start of the steady-state and final-tile compute loops,
+then restores normal priority before the LDS producer/consumer handoff. This
+preserves the exact delta-2 packed contract and its 120-VGPR/22-SGPR/18-KiB
+resource tuple.
+
+The assembled image was rejected by the gfx1151 runtime before the numerical
+gate: every one of five isolated launches returned `invalid device function`
+from `hipOccupancyMaxActiveBlocksPerMultiprocessor`. The source macro variant
+was loadable and exact, but its 41.84--42.26 TFLOPS results are the unscheduled
+source baseline, not evidence for the hand-scheduled leader. This closes
+priority control as a route to 50 and reinforces that an assembler-accepted
+instruction is not necessarily a usable gfx1151 runtime instruction.

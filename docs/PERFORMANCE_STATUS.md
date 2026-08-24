@@ -969,6 +969,22 @@ the current host: 48.911 TFLOPS in a 20-warmup/100-iteration five-block run,
 exact output. This is consistent with the established 48.980--49.035
 qualification band and does not change the promotion gate.
 
+### 2026-08-24 MAC-priority window screen
+
+The next producer/consumer hypothesis was a scheduler-policy change rather
+than another LDS layout: emit `s_setprio 1` around the hand-scheduled WMMA
+cluster and restore `s_setprio 0` immediately before each LDS handoff. The
+transformation is reproducible with `tools/patch_setprio_asm.py` and leaves
+the delta-2 resource tuple unchanged (120 VGPR, 22 SGPR, 18 KiB LDS).
+
+The gfx1151 runtime rejected the resulting code object before validation:
+`hipOccupancyMaxActiveBlocksPerMultiprocessor` returned `invalid device
+function` in all five isolated launches. A source-level priority build (not
+the hand-scheduled leader) was loadable and exact but only reached
+41.84--42.26 TFLOPS, so it is not a comparable promotion. The hand-scheduled
+priority window is closed as an unsupported ISA/runtime path; no invalid
+timing is retained.
+
 The companion `WMMA_BP_HALF_SWIZZLE=1` layout was also screened on the same
 256x128 packed shape. It passed the complete exactness tuple at unchanged
 two-block occupancy, but reached only 38.402 TFLOPS. Half-word LDS swizzling is
