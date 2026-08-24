@@ -3739,6 +3739,12 @@ bank-phase penalty and the 16-byte shift remains slower than delta-2. Register
 phase and LDS phase must therefore be optimized jointly rather than composed
 from separately favorable screens.
 
+The retained delta-2 binary was requalified on the current host in five fresh
+processes. Exact medians were 49.052, 48.828, 48.846, 48.724, and 48.680
+TFLOPS (48.826 average). This confirms the run-to-run package sensitivity and
+leaves the prior 49.035 qualification as the stronger record; no process met
+the 50-TFLOPS gate.
+
 ## 2026-08-24: 256x64 fragment geometry
 
 A new 256x64 block geometry was implemented with an explicit four-vector A

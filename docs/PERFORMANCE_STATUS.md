@@ -804,6 +804,15 @@ The latter difference is within screening noise and neither geometry approaches
 the 49.035-TFLOPS delta-2 leader. The temporary header and binaries were
 removed after the run. Raw-buffer prefetch is closed as a standalone route.
 
+### 2026-08-24 current-host requalification
+
+The retained `bp-register-phase-d2` binary was requalified in five fresh
+processes with full validation and 20 warmups/100 timed iterations. Medians
+were 49.052, 48.828, 48.846, 48.724, and 48.680 TFLOPS (48.826 average).
+Every process reproduced the exact reference tuple, but none reached 50. The
+earlier 49.035-TFLOPS five-process qualification remains the stronger retained
+record; this spread is the current control baseline for further assembly work.
+
 ### 2026-08-24 256x64 fragment geometry
 
 An explicitly repaired 256x64 block was tested as a four-wave block with four

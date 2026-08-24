@@ -1121,6 +1121,11 @@ gate. The research kernels and negative results are kept for reproducibility.
 Continue from the measured delta-2 register phase; do not promote isolated 50+
 samples that fail the sustained same-pass control.
 
+A current-host requalification of the retained delta-2 binary produced exact
+five-process medians of 49.052, 48.828, 48.846, 48.724, and 48.680 TFLOPS
+(48.826 average). It did not reach 50; the earlier 49.035 qualification
+remains the retained control and this spread is the baseline for future tests.
+
 The repaired 256x64 geometry used four waves per block and four resident blocks
 per CU. Its four-vector-per-thread A loader produced exact output at 42.962
 TFLOPS, but duplicated A traffic dominates the smaller LDS footprint. The
