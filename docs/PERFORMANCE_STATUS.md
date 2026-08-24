@@ -1236,6 +1236,16 @@ within package noise, while the combined 4/3/1 ladder fell to 49.597 in the
 short screen. Retain the original 6/4/2 ladder; wait-threshold relaxation is
 closed as a standalone route to 50 TFLOPS.
 
+### 2026-08-24 direct packed-store probe
+
+The fixed-shape epilogue was probed for a no-LDS vectorization: two adjacent
+FP16 accumulator registers were packed with `v_pack_b32_f16` and emitted with
+one `global_store_b32`. The image loaded at unchanged two-block/16-wave
+occupancy, but the full output gate failed (normalized maximum error
+0.767344810, RMS 0.668158748, cosine 0.992118715). The apparent register
+adjacency is not the output lane adjacency; direct store coalescing is rejected
+without a complete fragment-lane remap.
+
 ### 2026-08-24 normal 128x256 ownership screen
 
 The complementary N-wide ownership geometry was rebuilt from the packed source
