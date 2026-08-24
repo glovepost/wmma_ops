@@ -635,6 +635,10 @@ Global-load cache-policy variants reached 46.362–47.351 TFLOPS for A/B
 DLC/GLC/SLC combinations, with both-SLC at 46.560. All were exact, but cache
 hints regress from the ordinary prepacked refill policy.
 
+Direct-B/shared-A was also screened: it reached 32.803 TFLOPS with exact
+output. Direct global B latency and duplicate wave traffic outweigh removing B
+LDS reads, so the all-wave block-prepacked dataflow remains preferred.
+
 ## Record protocol
 
 Use this protocol before promoting a result in the README:

@@ -986,6 +986,12 @@ reached 47.155/47.129/46.995 TFLOPS; B-side DLC/GLC/SLC reached
 46.362/47.351/46.961; and both-SLC reached 46.560. All outputs were exact,
 but every cache hint regressed from the ordinary refill policy.
 
+The previously unmeasured direct-B/shared-A architecture was finally run. It
+keeps A in a two-slot LDS ring and loads B fragments directly from the
+block/K-major input, but reached only 32.803 TFLOPS with exact output. Direct
+global B latency and duplicate wave traffic outweigh the removed B LDS reads;
+the all-wave block-prepacked path remains the correct dataflow.
+
 ## Decision
 
 The correct block/K-major p8 kernel with progressive refill, scalar-offset
