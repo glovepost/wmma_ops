@@ -4111,3 +4111,11 @@ over the full output. The one-slice controls averaged 84.560 TOPS. The paired
 K16 residency removes one publication/barrier boundary per two slices, but
 ROCMFP4 codebook weights still cannot be sent directly to IU4 without a new
 quantization and scaling contract.
+
+The paired-K ring was generalized to four K16 slices (`IU4_PAIR_K=2`) in eight
+rotating LDS slots. The second fresh five-process bracket measured 94.044 INT4
+TOPS on average (93.445--94.700), exact in every process, against 91.244 for
+the two-slice control. A separate earlier bracket had one 84.765 TOPS outlier;
+it is retained as noise evidence, not as the promoted number. Four-slice IU4
+is the strongest integer-WMMA architecture so far, while the FP16 50-TFLOPS
+gate remains open and the ROCMFP4 codebook contract is unchanged.

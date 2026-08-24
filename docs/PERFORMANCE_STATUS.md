@@ -1325,3 +1325,13 @@ the one-slice controls were 83.861, 84.621, 84.484, 84.867, and 84.969 (average
 84.560), a 7.6% paired-K gain. This is a real exact integer-WMMA result, but it
 is not an FP16 TFLOPS result and cannot be substituted for the 49.035 FP16
 leader without changing the activation/weight and scale contract.
+
+The paired-K ring was then generalized from two to four resident K16 slices
+(`-DIU4_PAIR_K=2`), using eight rotating LDS slots and one publication per
+four slices. A second fresh five-process bracket (10 warmups/10 timings per
+process) stayed exact over all 16,777,216 INT32 outputs. Candidate medians were
+94.141, 94.004, 93.445, 94.700, and 93.931 INT4 TOPS (average **94.044**,
+floor 93.445); the two-slice controls were 91.640, 91.208, 91.514, 91.397,
+and 90.460 (average 91.244). The earlier bracket contained one 84.765 TOPS
+candidate outlier and is not used for promotion. Four-slice residency is now
+the best qualified IU4 GEMM, but remains separate from the 49.035 FP16 goal.

@@ -72,7 +72,8 @@ __global__ __launch_bounds__(kThreads) void iu4_gemm(
     int n,
     int k)
 {
-    constexpr int kLdsBuffers = IU4_PAIR_K ? 4 : 2;
+    constexpr int kPairSlices = IU4_PAIR_K == 2 ? 4 : 2;
+    constexpr int kLdsBuffers = IU4_PAIR_K ? kPairSlices * 2 : 2;
     __shared__ uint32_t a_lds[kLdsBuffers][kBlockM][kLdsStrideWords];
     __shared__ uint32_t b_lds[kLdsBuffers][kBlockN][kLdsStrideWords];
 
@@ -105,14 +106,20 @@ __global__ __launch_bounds__(kThreads) void iu4_gemm(
     if constexpr(IU4_PAIR_K)
     {
         #pragma unroll
-        for(int load = 0; load < kCooperativeAWords; ++load)
+        for(int init_tile = 1; init_tile < kPairSlices; ++init_tile)
         {
-            const int flat = tid * kCooperativeAWords + load;
-            a_lds[1][flat >> 1][flat & 1]
-                = a[a_block + static_cast<size_t>(kBlockM * 2 + flat)];
+            #pragma unroll
+            for(int load = 0; load < kCooperativeAWords; ++load)
+            {
+                const int flat = tid * kCooperativeAWords + load;
+                a_lds[init_tile][flat >> 1][flat & 1]
+                    = a[a_block + static_cast<size_t>(init_tile * kBlockM * 2
+                                                       + flat)];
+            }
+            b_lds[init_tile][cooperative_row][cooperative_word]
+                = b[b_block + static_cast<size_t>(init_tile * kBlockN * 2
+                                                   + tid)];
         }
-        b_lds[1][cooperative_row][cooperative_word]
-            = b[b_block + static_cast<size_t>(kBlockN * 2 + tid)];
     }
     __builtin_amdgcn_s_waitcnt(0);
     __syncthreads();
@@ -124,39 +131,40 @@ __global__ __launch_bounds__(kThreads) void iu4_gemm(
         // Keep two complete K16 slices resident while the next pair is
         // fetched into the unused LDS slots.  The only barrier is at the
         // pair boundary, so the two WMMA groups share one publication cost.
-        for(int pair_tile = 0; pair_tile < k_tiles; pair_tile += 2)
+        for(int pair_tile = 0; pair_tile < k_tiles;
+            pair_tile += kPairSlices)
         {
-            const int current = ((pair_tile / 2) & 1) * 2;
-            const int next = current ^ 2;
-            const bool has_next_pair = pair_tile + 2 < k_tiles;
-            uint32_t staged_a0[kCooperativeAWords]{};
-            uint32_t staged_a1[kCooperativeAWords]{};
-            uint32_t staged_b0 = 0;
-            uint32_t staged_b1 = 0;
+            const int current = ((pair_tile / kPairSlices) & 1)
+                * kPairSlices;
+            const int next = current ^ kPairSlices;
+            const bool has_next_pair = pair_tile + kPairSlices < k_tiles;
+            uint32_t staged_a[kPairSlices][kCooperativeAWords]{};
+            uint32_t staged_b[kPairSlices]{};
             if(has_next_pair)
             {
-                const size_t tile0 = static_cast<size_t>(pair_tile + 2)
-                    * kBlockM * 2;
-                const size_t tile1 = static_cast<size_t>(pair_tile + 3)
-                    * kBlockM * 2;
                 #pragma unroll
-                for(int load = 0; load < kCooperativeAWords; ++load)
+                for(int tile_offset = 0; tile_offset < kPairSlices;
+                    ++tile_offset)
                 {
-                    const int flat = tid * kCooperativeAWords + load;
-                    staged_a0[load] = a[a_block + tile0
-                        + static_cast<size_t>(flat)];
-                    staged_a1[load] = a[a_block + tile1
-                        + static_cast<size_t>(flat)];
+                    const size_t tile = static_cast<size_t>(pair_tile
+                        + kPairSlices + tile_offset);
+                    #pragma unroll
+                    for(int load = 0; load < kCooperativeAWords; ++load)
+                    {
+                        const int flat = tid * kCooperativeAWords + load;
+                        staged_a[tile_offset][load]
+                            = a[a_block + tile * kBlockM * 2
+                                + static_cast<size_t>(flat)];
+                    }
+                    const size_t b_tile = tile * kBlockN * 2;
+                    staged_b[tile_offset]
+                        = b[b_block + b_tile + static_cast<size_t>(tid)];
                 }
-                const size_t b_tile0 = static_cast<size_t>(pair_tile + 2)
-                    * kBlockN * 2;
-                const size_t b_tile1 = static_cast<size_t>(pair_tile + 3)
-                    * kBlockN * 2;
-                staged_b0 = b[b_block + b_tile0 + static_cast<size_t>(tid)];
-                staged_b1 = b[b_block + b_tile1 + static_cast<size_t>(tid)];
             }
 
-            for(int tile_offset = 0; tile_offset < 2; ++tile_offset)
+            #pragma unroll
+            for(int tile_offset = 0; tile_offset < kPairSlices;
+                ++tile_offset)
             {
                 const int tile = current + tile_offset;
                 i32x2 a_frag[kWaveTilesM];
@@ -200,14 +208,19 @@ __global__ __launch_bounds__(kThreads) void iu4_gemm(
             {
                 asm volatile("s_waitcnt vmcnt(0)" ::: "memory");
                 #pragma unroll
-                for(int load = 0; load < kCooperativeAWords; ++load)
+                for(int tile_offset = 0; tile_offset < kPairSlices;
+                    ++tile_offset)
                 {
-                    const int flat = tid * kCooperativeAWords + load;
-                    a_lds[next][flat >> 1][flat & 1] = staged_a0[load];
-                    a_lds[next + 1][flat >> 1][flat & 1] = staged_a1[load];
+                    #pragma unroll
+                    for(int load = 0; load < kCooperativeAWords; ++load)
+                    {
+                        const int flat = tid * kCooperativeAWords + load;
+                        a_lds[next + tile_offset][flat >> 1][flat & 1]
+                            = staged_a[tile_offset][load];
+                    }
+                    b_lds[next + tile_offset][cooperative_row][cooperative_word]
+                        = staged_b[tile_offset];
                 }
-                b_lds[next][cooperative_row][cooperative_word] = staged_b0;
-                b_lds[next + 1][cooperative_row][cooperative_word] = staged_b1;
                 asm volatile("s_waitcnt lgkmcnt(0)" ::: "memory");
                 __syncthreads();
             }
