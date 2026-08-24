@@ -1299,3 +1299,10 @@ versus 48.773 for controls. A hand reconstruction of the default XOR-snake
 map with scalar bit arithmetic produced incorrect output (normalized error
 1.000000), so fixed traversal is closed without a verified equivalent cache
 mapping.
+
+The repository's known `cu_5x8_record_mapping` (mapping mode 5) was also
+screened. Its source image was exact at 46.933 TFLOPS, but splicing only its
+prologue into delta-2 was invalid because the mapping changes the pointer/SGPR
+contract after the mapper. A source-only delta-2 register shift remained exact
+but raised allocation to 121 VGPR/three blocks and reached 38.857 TFLOPS. The
+5x8 traversal is not a drop-in hand-schedule optimization.

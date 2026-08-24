@@ -4091,3 +4091,10 @@ interleaved comparisons averaged 48.536 TFLOPS versus 48.773 controls after a
 was not exact (normalized error 1.000000), showing that the cache traversal
 contract is not captured by the naive scalar formula. Fixed-grid mapping is
 closed without a verified equivalent traversal.
+
+The known `cu_5x8_record_mapping` was then evaluated as a different cache
+traversal. The complete source mode-5 image was exact at 46.933 TFLOPS. A
+prologue-only splice into delta-2 failed because mode 5 changes the downstream
+pointer/SGPR contract; a source mode-5 register shift was exact but reached
+38.857 TFLOPS at 121 VGPR/three blocks. The traversal needs a full hand
+regeneration, not a prefix transplant.
