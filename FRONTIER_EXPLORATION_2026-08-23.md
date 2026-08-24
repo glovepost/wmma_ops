@@ -483,6 +483,60 @@ TOPS, versus 84.992 and 84.182 for the transposed two-column geometry.  A
 and regressed to 78.367 TOPS.  This makes the 128x128, four-column form the
 retained W4A4 architecture.
 
+### Paperclip literature pass and four-wave live-range split
+
+Paperclip full-text extraction was used for a focused pass over recent kernel
+work. Four findings map directly onto the gfx1151 frontier:
+
+- The FP16 study in [Hand-Written PTX Tensor-Core GEMM
+  Kernels](https://arxiv.org/abs/2608.10103) found that halving accumulator
+  register pressure and raising occupancy did not improve FP16 GEMM, while a
+  deeper pipeline could lose to memory-queue pressure. This reinforces the
+  existing rule that a lower VGPR count is only a hypothesis until same-pass
+  timing and counters confirm it.
+- [Nautilus](https://arxiv.org/abs/2604.14825) explicitly uses buffer-lifetime
+  analysis, live-range splitting, and rematerialization near use to reduce
+  local-memory pressure. That transformation inspired the partial late refill
+  below.
+- [VeriLocc](https://arxiv.org/abs/2506.17506) demonstrates that register
+  assignment itself can expose performance missed by a production compiler.
+  Its reported MI250x gain relies on CDNA2 AccVGPR placement and does not
+  transfer directly to RDNA3.5, but its method motivates treating address and
+  fragment allocation as an optimization dimension rather than fixed output.
+- [GPU-Tile-Sim](https://arxiv.org/abs/2607.11262) models optimized-kernel
+  performance through tile-level data and order dependencies. For this kernel
+  the relevant unit is therefore the complete `load -> WMMA -> handoff` graph,
+  not the nominal latency of one load or barrier in isolation.
+
+The new four-wave 128x128 experiment applies those lessons without changing
+the default kernel. A compiler scheduling fence after each B fragment keeps
+only one B fragment live and reduces static allocation from 153 to 129 VGPR.
+The next step overlaps only the two A refill vectors with WMMA, commits A after
+the handoff barrier, and then loads and immediately commits B. This splits the
+A/B refill live ranges and reaches 121 VGPR. Finally, scalar-resource MUBUF A
+loads share one vector offset and encode the second 128-bit load with an
+immediate `+16`, reaching **120 VGPR**, 22 SGPR, 12 KiB LDS, and zero spills.
+
+The allocation boundaries matter more than the raw counts: the RDNA3.5
+24-VGPR wave32 quantum puts 153 in the 168-register class and 129/127 in the
+144-register class; 120 reaches the next class. ROCm 7.14 device assembly for
+the default path is byte-identical after normalizing the per-build HIP CUID.
+The GPU bracket resolved the tradeoff. The 153-VGPR control reached 41.419
+TFLOPS at four blocks/16 waves, while the 129-VGPR streamed-B form reached
+45.694 TFLOPS at five blocks/20 waves, a real 10.3% architecture gain. The
+later forms all retained five blocks/20 waves and passed the exact full
+reference tuple, but lost speed as overlap was removed: late-B1 at 127 VGPR
+reached 45.011 TFLOPS, split refill at 121 VGPR reached 44.630, and the
+120-VGPR MUBUF split reached 44.839. The bracketed 129-VGPR controls reached
+45.585/45.598 and the retained p8 controls reached 48.031/48.048 TFLOPS.
+
+The reason the 120-register boundary did not help is now measured rather than
+assumed: 12 KiB of LDS already caps this geometry at five resident blocks, so
+the lower register class cannot admit a sixth. The streamed-B 129-VGPR form is
+the retained four-wave result, but it remains 5.1% below the p8 control
+midpoint. The partial late-refill variants are kept as negative evidence; they
+do not advance to a longer promotion run.
+
 ## Decision
 
 The correct block/K-major p8 kernel materially exceeds the original-layout

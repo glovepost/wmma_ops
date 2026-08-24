@@ -294,6 +294,17 @@ Clause removal, SALU reordering, and advancing only the B refill did not improve
 it.  This is retained as a code-generation building block, not promoted as a
 new record: it remains within normal run-to-run variation and below 50 TFLOPS.
 
+A Paperclip-guided four-wave revisit found one substantial but insufficient
+architecture gain. Preventing LLVM from hoisting all four B fragments lowered
+the 128x128 kernel from 153 to 129 VGPR, raised runtime residency from four
+blocks/16 waves to five blocks/20 waves, and improved throughput from 41.419 to
+45.694 TFLOPS (+10.3%). Splitting the A/B refill live ranges and using one
+MUBUF vector offset reached 120 VGPR with zero spills, but the 12-KiB LDS tile
+already limits residency to five blocks. The 127/121/120-VGPR forms therefore
+remained at 20 waves and reached only 45.011/44.630/44.839 TFLOPS. All were
+exact; the lower-register forms lose B-load overlap without gaining occupancy.
+The retained p8 controls in the closing bracket reached 48.031/48.048 TFLOPS.
+
 At 256 GB/s, the corresponding compute-to-memory ridge point is about
 232 FLOP/byte (`59.4e12 / 256e9`), not 106 FLOP/byte. Both inputs should be
 replaced by observed clocks and sustained bandwidth when making a measured

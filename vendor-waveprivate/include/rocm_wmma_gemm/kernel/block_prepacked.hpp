@@ -88,6 +88,18 @@ namespace rocm_wmma_gemm
 #ifndef WMMA_BP_VECTOR_EPILOGUE
 #define WMMA_BP_VECTOR_EPILOGUE 0
 #endif
+#ifndef WMMA_BP_STREAM_B_BARRIER
+#define WMMA_BP_STREAM_B_BARRIER 0
+#endif
+#ifndef WMMA_BP_LATE_B1_PREFETCH
+#define WMMA_BP_LATE_B1_PREFETCH 0
+#endif
+#ifndef WMMA_BP_LATE_B_REFILL
+#define WMMA_BP_LATE_B_REFILL 0
+#endif
+#ifndef WMMA_BP_BUFFER_A_PREFETCH
+#define WMMA_BP_BUFFER_A_PREFETCH 0
+#endif
 
 struct block_prepacked_gemm
 {
@@ -115,12 +127,19 @@ struct block_prepacked_gemm
         static_assert((block_m == 128 || block_m == 256)
                       && (block_n == 128 || block_n == 256));
         static_assert(WMMA_BP_K_SLICES == 1 || WMMA_BP_K_SLICES == 2);
+        static_assert(!WMMA_BP_LATE_B_REFILL
+                          || (WMMA_BP_PACK_N && block_m == 128
+                              && block_n == 128 && !WMMA_BP_DOUBLE_BUFFER
+                              && warp_tile_m == 4 && !WMMA_BP_HALF_SWIZZLE
+                              && !WMMA_BP_LATE_B1_PREFETCH),
+                      "late B refill specializes N-packed 128x128 single buffering");
         static_assert(!WMMA_BP_K2_RING
                           || (WMMA_BP_K_SLICES == 2 && WMMA_BP_PACK_N
                               && block_m == 256 && block_n == 128
                               && !WMMA_BP_DOUBLE_BUFFER),
                       "K2 ring specializes N-packed 256x128 single buffering");
         using u16x8 = uint16_t __attribute__((ext_vector_type(8)));
+        using i32x4 = int32_t __attribute__((ext_vector_type(4)));
 
         __shared__ half a_lds[lds_buffers * block_m * stride_a];
         __shared__ half b_lds[lds_buffers * block_n * stride_b];
@@ -256,6 +275,38 @@ struct block_prepacked_gemm
                         b_lds + b_row * stride_b + physical_half) = next_b;
                 }
             }
+        };
+
+        // A live-range split for the four-wave 128x128 experiment. Keep the A
+        // refill overlapped with WMMA, commit it after the handoff barrier,
+        // then load and immediately commit B. This deliberately sacrifices B
+        // load/compute overlap so A and B refill vectors need not be live at
+        // the same time. It is opt-in because the resource/latency tradeoff
+        // must be measured on gfx1151 rather than inferred from occupancy.
+        auto commit_a_128 = [&]()
+        {
+            *reinterpret_cast<u16x8*>(a_lds + tid * stride_a) = next_a0;
+            *reinterpret_cast<u16x8*>(a_lds + tid * stride_a + 8) = next_a1;
+        };
+        auto refill_and_commit_b_128 = [&](const half* next_b_ptr)
+        {
+            const u16x8* b_vectors
+                = reinterpret_cast<const u16x8*>(next_b_ptr);
+            const u16x8 late_b0 = b_vectors[2 * tid];
+            const u16x8 late_b1 = b_vectors[2 * tid + 1];
+            asm volatile("s_waitcnt vmcnt(0)" ::: "memory");
+            *reinterpret_cast<u16x8*>(b_lds + tid * stride_b) = late_b0;
+            *reinterpret_cast<u16x8*>(b_lds + tid * stride_b + 8) = late_b1;
+        };
+        auto buffer_load_a_128 = [&](const half* next_a,
+                                     int vector_byte_offset,
+                                     int scalar_byte_offset)
+        {
+            const auto resource = __builtin_amdgcn_make_buffer_rsrc(
+                const_cast<half*>(next_a), 0, -1, 0x31004000);
+            const i32x4 words = __builtin_amdgcn_raw_buffer_load_b128(
+                resource, vector_byte_offset, scalar_byte_offset, 0);
+            return __builtin_bit_cast(u16x8, words);
         };
 
         auto prefetch_k2 = [&](const half* next_a, const half* next_b_ptr)
@@ -569,12 +620,25 @@ struct block_prepacked_gemm
                             else if constexpr(block_m == 128 && block_n == 128)
                             {
                                 if(wn == 0)
-                                    next_a0 = a_vectors[2 * tid];
+                                {
+                                    if constexpr(WMMA_BP_BUFFER_A_PREFETCH)
+                                        next_a0 = buffer_load_a_128(
+                                            next_a, 32 * tid, 0);
+                                    else
+                                        next_a0 = a_vectors[2 * tid];
+                                }
                                 else if(wn == 1)
-                                    next_a1 = a_vectors[2 * tid + 1];
-                                else if(wn == 2)
+                                {
+                                    if constexpr(WMMA_BP_BUFFER_A_PREFETCH)
+                                        next_a1 = buffer_load_a_128(
+                                            next_a, 32 * tid, 16);
+                                    else
+                                        next_a1 = a_vectors[2 * tid + 1];
+                                }
+                                else if(wn == 2 && !WMMA_BP_LATE_B_REFILL)
                                     next_b = b_vectors[2 * tid];
-                                else if(wn == 3)
+                                else if(wn == 3 && !WMMA_BP_LATE_B1_PREFETCH
+                                        && !WMMA_BP_LATE_B_REFILL)
                                     next_b1 = b_vectors[2 * tid + 1];
                             }
                         }
@@ -598,6 +662,18 @@ struct block_prepacked_gemm
                                 wmma<false>(a_frag[wm], b_frag, c_n[wm][wn]);
                             else
                                 wmma<true>(a_frag[wm], b_frag, c_n[wm][wn - 2]);
+                        }
+                        if constexpr(WMMA_BP_STREAM_B_BARRIER)
+                            __builtin_amdgcn_sched_barrier(0);
+                        if constexpr(do_prefetch && WMMA_BP_LATE_B1_PREFETCH
+                                     && block_m == 128 && block_n == 128)
+                        {
+                            if(wn == 3)
+                            {
+                                const u16x8* b_vectors
+                                    = reinterpret_cast<const u16x8*>(next_b_ptr);
+                                next_b1 = b_vectors[2 * tid + 1];
+                            }
                         }
                     }
                 }
@@ -800,7 +876,13 @@ struct block_prepacked_gemm
                     asm volatile("s_waitcnt vmcnt(0)" ::: "memory");
                     __syncthreads();
                 }
-                commit_all();
+                if constexpr(WMMA_BP_LATE_B_REFILL)
+                {
+                    commit_a_128();
+                    refill_and_commit_b_128(next_b_ptr);
+                }
+                else
+                    commit_all();
                 __builtin_amdgcn_s_waitcnt(0x7f);
                 __syncthreads();
             }
@@ -820,7 +902,9 @@ struct block_prepacked_gemm
         }
         else if constexpr(WMMA_BP_DOUBLE_BUFFER_LATE)
         {
-            static_assert(WMMA_BP_PACK_N && block_m == 256 && block_n == 128,
+            static_assert(!WMMA_BP_DOUBLE_BUFFER_LATE
+                              || (WMMA_BP_PACK_N && block_m == 256
+                                  && block_n == 128),
                           "late-refill double buffer specializes N-packed 256x128");
             auto compute_late = [&]<int buffer>()
             {

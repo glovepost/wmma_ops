@@ -3241,3 +3241,48 @@ flock -w 7200 /root/gpu.lock -c '<exclusive validation command>'
 Correctness runs before timing, profiler counters are collected in separate
 passes, and only a correct same-pass improvement advances to the sustained
 fresh-process promotion gate.
+
+### 2026-08-23: Paperclip-guided register live-range experiment
+
+A Paperclip full-text pass over recent GEMM/compiler papers produced one new
+implementable experiment rather than another wholesale architecture port.
+Nautilus recommends splitting long local-buffer live ranges and
+rematerializing inexpensive values near use; VeriLocc shows that register
+assignment can hide performance opportunities even in mature AMD toolchains.
+The newer FP16 PTX study and GPU-Tile-Sim add the guardrails: occupancy alone
+does not predict throughput, and the full dependency/overlap graph must be
+measured.
+
+The four-wave 128x128 p8 kernel initially compiled at 153 VGPR. An opt-in
+`WMMA_BP_STREAM_B_BARRIER` scheduling fence stops LLVM from hoisting all four B
+fragments and lowers it to 129. `WMMA_BP_LATE_B_REFILL` then overlaps only A
+with WMMA, commits A after the handoff barrier, and streams B into LDS, lowering
+the count to 121. `WMMA_BP_BUFFER_A_PREFETCH` expresses both A vector loads as
+MUBUF operations with one shared vector offset and an immediate `+16` on the
+second load, reaching 120 VGPR, 22 SGPR, 12 KiB LDS, and zero spills.
+
+This reaches a real 24-VGPR allocation boundary; the earlier 129-to-127 change
+did not. The ordinary default device assembly remains byte-identical apart
+from its generated HIP CUID.
+
+The gfx1151 bracket then supplied the missing result. The 153-VGPR four-wave
+control reached 41.419 TFLOPS at four blocks/16 waves. Streaming B at 129 VGPR
+raised residency to five blocks/20 waves and reached 45.694 TFLOPS, a 10.3%
+gain. Further lowering did not change residency: 127-VGPR late-B1 reached
+45.011, 121-VGPR split refill reached 44.630, and the 120-VGPR MUBUF split
+reached 44.839 TFLOPS. All passed the full rocBLAS reference tuple. Bracketed
+129-VGPR repeats were 45.585/45.598 versus 48.031/48.048 for the retained p8
+kernel.
+
+The mechanism is unambiguous. Five 12-KiB workgroups consume 60 KiB LDS; a
+sixth cannot fit, so 120 VGPR cannot improve the already LDS-limited runtime
+occupancy. Splitting the refill merely removes B-load/WMMA overlap. Retain the
+129-VGPR streamed-B implementation as the best four-wave form, but do not
+promote it or run a longer screen.
+
+Primary papers:
+
+- [Hand-Written PTX Tensor-Core GEMM Kernels](https://arxiv.org/abs/2608.10103)
+- [Nautilus](https://arxiv.org/abs/2604.14825)
+- [VeriLocc](https://arxiv.org/abs/2506.17506)
+- [GPU-Tile-Sim](https://arxiv.org/abs/2607.11262)
