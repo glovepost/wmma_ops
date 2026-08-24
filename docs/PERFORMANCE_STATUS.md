@@ -272,6 +272,12 @@ contract: packing is outside the timed region. The previous sustained leader
 was 48.614 TFLOPS. A 49.573-TFLOPS short sample and two isolated 50+ samples
 remain non-promotable; the sustained 50-TFLOPS FP16 gate is still open.
 
+A fresh five-process recheck after the shared-box load-settle experiment
+measured **48.939/48.912/48.847/48.633/48.504 TFLOPS** (48.767 average,
+48.504 floor). Every process passed the exact numerical tuple. This confirms
+that a warmer package state or loader ordering does not close the gap; the
+promotion gate remains five fresh processes above 50.
+
 A Paperclip-guided WMMA issue-order screen then permuted only the three
 fully-ready four-row fragments in the delta-2 hot loop. The progressive first
 fragment was left untouched, and row 0 remained first in the final fragment
