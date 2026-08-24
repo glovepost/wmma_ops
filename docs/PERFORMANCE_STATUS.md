@@ -916,3 +916,13 @@ run; it produced no timing or correctness result. This is a launch-contract
 failure, not evidence for or against row-major locality. Temporary assembly
 and binaries were deleted, and the existing mapping and delta-2 schedule are
 unchanged.
+
+### 2026-08-24 composed accumulator-bank permutation
+
+The earlier cyclic rewrite was repeated using the repository's register-aware
+pair-swap transform twice, producing a valid three-bank cycle while preserving
+the v0-tied epilogue bank. It passed the complete exactness tuple and loaded at
+the same 120-VGPR/two-block occupancy. A five-process, 20-warmup/100-iteration
+qualification measured 48.839, 48.698, 48.749, 48.649, and 48.712 TFLOPS
+(48.729 average, 48.649 floor). The first 49.059 short screen was therefore
+package noise; the composed permutation is not promoted over delta-2.

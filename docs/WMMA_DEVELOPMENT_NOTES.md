@@ -54,6 +54,13 @@ the loader rejected that manually shortened code object before launch. No
 candidate or mapping claim was promoted, and all temporary artifacts were
 removed after the lock was released.
 
+The cyclic-bank idea was then rebuilt by composing two existing
+register-aware pair swaps instead of globally remapping register text. This
+produced a loader-valid three-bank cycle and passed exactness, but its required
+five-process qualification measured 48.839, 48.698, 48.749, 48.649, and
+48.712 TFLOPS (48.729 average, 48.649 floor). The isolated 49.059 result was
+noise; the retained delta-2 image remains faster and more stable.
+
 The next physical-layout screen cyclically rotated three of the four FP16
 accumulator banks while preserving the v0-based epilogue bank. Both rotations
 were rejected by the gfx1151 loader before occupancy/correctness, whereas the
