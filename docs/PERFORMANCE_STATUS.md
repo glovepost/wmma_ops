@@ -956,3 +956,13 @@ The companion `WMMA_BP_HALF_SWIZZLE=1` layout was also screened on the same
 256x128 packed shape. It passed the complete exactness tuple at unchanged
 two-block occupancy, but reached only 38.402 TFLOPS. Half-word LDS swizzling is
 therefore closed as a standalone data-movement optimization.
+
+### 2026-08-24 early-B prefetch probe
+
+The next-B global vector was moved ahead of the second WMMA group and placed
+in spare high VGPRs to lengthen its latency-hiding window. The first image
+declared only 120 VGPR despite using v120:v123; its 51.372-TFLOPS timing was
+invalid and failed exactness (normalized error 1.002724390). Raising the image
+metadata to 128 VGPR and correcting VMEM completion order still failed with
+the same error (49.575 TFLOPS in the copy-back form). The fast timing is not a
+result; this register/live-range producer rewrite is rejected.

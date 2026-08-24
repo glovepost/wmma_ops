@@ -3839,3 +3839,10 @@ ring variant.
 The half-word LDS swizzle companion was exact at two-block occupancy but
 reached only 38.402 TFLOPS. This layout permutation is also closed; further
 progress needs a new packed producer rather than another swizzle.
+
+An early-B prefetch probe moved the next global B vector into v120:v123 before
+the second WMMA group. The initial image illegally declared 120 VGPR and
+showed an invalid 51.372-TFLOPS timing. A 128-VGPR image with reordered VMEM
+completion and copy-back still failed exactness at 49.575 TFLOPS. The apparent
+50+ result is therefore rejected; the live-range/register contract must be
+redesigned before this producer idea can be revisited.
