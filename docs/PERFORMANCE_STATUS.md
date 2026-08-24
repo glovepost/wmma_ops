@@ -705,6 +705,13 @@ would consume about 48 KiB LDS per block and remove the two-block occupancy of
 the delta-2 leader. The IU4 paired-K schedule is thus not a direct FP16 port;
 the next candidate needs a different fragment partition.
 
+A composition sweep shifted the B LDS base in the retained delta-2 assembly by
++4, +8, and +16 bytes. All candidates remained exact at 120 VGPR, but measured
+38.059, 38.051, and 48.520 TFLOPS in one same-lock screen. The small shifts
+expose a severe LDS bank-phase penalty; the 16-byte form still regresses the
+control. The winning VGPR phase is not independently composable with a B-bank
+shift.
+
 ## Record protocol
 
 Use this protocol before promoting a result in the README:

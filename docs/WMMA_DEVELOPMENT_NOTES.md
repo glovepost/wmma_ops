@@ -3683,3 +3683,10 @@ fragment contract is not valid for that geometry. A four-slot paired-K design
 at 256x128 would consume approximately 48 KiB LDS per block, eliminating the
 two-block occupancy of the 49-TFLOPS delta-2 kernel. More LDS buffering alone is
 therefore not the route to 50 FP16 TFLOPS; a new fragment partition is required.
+
+A follow-up composition sweep shifted the B LDS base of delta-2 by +4, +8, and
++16 bytes. All forms were exact at 120 VGPR, but measured 38.059, 38.051, and
+48.520 TFLOPS in the same lock window. The first two shifts expose a severe LDS
+bank-phase penalty and the 16-byte shift remains slower than delta-2. Register
+phase and LDS phase must therefore be optimized jointly rather than composed
+from separately favorable screens.
