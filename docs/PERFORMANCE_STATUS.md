@@ -617,6 +617,11 @@ VMEM clause/grouping variants were screened as well: `bp-clause2-break1`,
 measured 47.723–47.445 TFLOPS, all exact at the same 120-VGPR occupancy.
 Every form regressed from the delta-2 schedule.
 
+Paired-fragment/read2 variants were screened too: B-pair forms reached
+47.576–47.642 TFLOPS, p4 64-bit reads 44.103, and p8 read2 forms
+43.753–43.809 TFLOPS. All valid output was exact, but none improved the
+delta-2 control.
+
 ## Record protocol
 
 Use this protocol before promoting a result in the README:

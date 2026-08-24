@@ -963,6 +963,12 @@ measured 47.723, 47.662, 47.589, 47.501, and 47.445 TFLOPS respectively.
 All were exact at the same 120-VGPR occupancy, but every form regressed from
 the delta-2 schedule.
 
+Paired-fragment and read2 variants were screened next. `bp-bpair`, `bp-b-pair`,
+and `bp-bpair-no-vmwait` measured 47.642, 47.576, and 47.593 TFLOPS; the
+`bp-p4-b64` form reached 44.103; and `bp-p8-read2`/`bp-p8-read2-loads`
+reached 43.809/43.753 TFLOPS. All valid outputs were exact, but the operand
+pairing/read-width changes regress from the delta-2 control.
+
 ## Decision
 
 The correct block/K-major p8 kernel with progressive refill, scalar-offset
