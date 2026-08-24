@@ -601,6 +601,18 @@ sample but failed correctness (`normalized_max_error=137.345592071`, cosine
 `0.693088403`). The current wait thresholds are load-bearing and remain
 unchanged.
 
+### 2026-08-24 accumulator-bank permutation screen
+
+The hand image was rebuilt with a cyclic permutation of the physical FP16
+accumulator banks, leaving the v0-based epilogue bank fixed and rotating the
+other three complete banks. Both non-identity rotations were rejected by the
+gfx1151 loader (`hipOccupancyMaxActiveBlocksPerMultiprocessor` returned
+`invalid device function`) before correctness or timing. A previously
+validated pairwise bank swap still loads and runs, so this is specific to the
+cyclic mapping rather than a general inability to change accumulator
+placement. No TFLOPS result is recorded and the retained delta-2 image is
+unchanged.
+
 Removing only the pre-publish `lgkmcnt(0)` wait, while retaining the VMEM
 wait and both barriers, remained exact but reached 48.904 TFLOPS. The wait is
 not redundant on gfx1151 and remains part of the control sequence.

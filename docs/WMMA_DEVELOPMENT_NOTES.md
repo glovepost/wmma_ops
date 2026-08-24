@@ -54,6 +54,12 @@ the loader rejected that manually shortened code object before launch. No
 candidate or mapping claim was promoted, and all temporary artifacts were
 removed after the lock was released.
 
+The next physical-layout screen cyclically rotated three of the four FP16
+accumulator banks while preserving the v0-based epilogue bank. Both rotations
+were rejected by the gfx1151 loader before occupancy/correctness, whereas the
+known pairwise bank swap still loads. This is recorded as an unsupported image
+mapping, not as a performance result; the delta-2 leader remains unchanged.
+
 The output epilogue was specialized for the divisible 4096x4096 benchmark so
 each fragment stores directly without per-element bounds checks. It remained
 exact at 47.850 TFLOPS with two resident blocks, which shows that tail
