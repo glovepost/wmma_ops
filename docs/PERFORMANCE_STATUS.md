@@ -639,6 +639,12 @@ Direct-B/shared-A was also screened: it reached 32.803 TFLOPS with exact
 output. Direct global B latency and duplicate wave traffic outweigh removing B
 LDS reads, so the all-wave block-prepacked dataflow remains preferred.
 
+Hoisting direct-B VMEM groups past four serialized waits improved that
+architecture from 32.803 to 38.854 TFLOPS exactly (145 VGPR, 24 KiB LDS).
+Removing the remaining `vmcnt(4)`/`vmcnt(2)` fences reached 39.039 TFLOPS but
+failed correctness (`normalized_max_error=0.324106677`, cosine 0.992856290).
+Direct-B remains latency-bound.
+
 ## Record protocol
 
 Use this protocol before promoting a result in the README:

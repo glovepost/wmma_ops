@@ -992,6 +992,13 @@ block/K-major input, but reached only 32.803 TFLOPS with exact output. Direct
 global B latency and duplicate wave traffic outweigh the removed B LDS reads;
 the all-wave block-prepacked path remains the correct dataflow.
 
+An ISA-only direct-B pipeline repair removed four serialized VMEM waits before
+the first B WMMA group and improved that architecture from 32.803 to 38.854
+TFLOPS with exact output (145 VGPR, 24 KiB LDS, two blocks). Removing the
+remaining `vmcnt(4)`/`vmcnt(2)` fences reached 39.039 TFLOPS but failed the
+numerical gate (`normalized_max_error=0.324106677`, cosine 0.992856290).
+Direct-B remains latency-bound and is not a route to 50 TFLOPS.
+
 ## Decision
 
 The correct block/K-major p8 kernel with progressive refill, scalar-offset
