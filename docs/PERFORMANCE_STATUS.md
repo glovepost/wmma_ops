@@ -649,6 +649,10 @@ Pair-local A handoff variants reached 36.829–44.185 TFLOPS, all exact. Pair
 signaling costs more than the retained workgroup barrier, so producer/consumer
 handoff is closed for this square workload.
 
+Wave-private/staging variants reached 35.850–37.492 TFLOPS; the 128×128 form
+also failed the numerical threshold with normalized error 0.087310902. Lower
+cooperative LDS sharing or occupancy is not competitive with delta-2.
+
 ## Record protocol
 
 Use this protocol before promoting a result in the README:

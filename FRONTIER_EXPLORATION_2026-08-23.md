@@ -1004,6 +1004,12 @@ the base, cyclic, and cyclic-prefetch forms reached 44.185, 41.254, and
 36.829 TFLOPS respectively, all exact. Pair-level signaling costs more than
 the retained workgroup barrier, so this branch is closed.
 
+Wave-private/staging variants were screened as a final architecture check:
+`bp-waveprivate-a` reached 37.492 TFLOPS exact; `bp-warp2-128-fix` reached
+37.364 TFLOPS but failed the normal numerical threshold (normalized error
+0.087310902); and `bp-persistent-block` reached 35.850 TFLOPS exact. Reducing
+cooperative LDS sharing or occupancy is not competitive with the delta-2 path.
+
 ## Decision
 
 The correct block/K-major p8 kernel with progressive refill, scalar-offset
