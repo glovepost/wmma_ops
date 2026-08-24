@@ -1244,3 +1244,13 @@ tile. It used two resident blocks/16 waves and passed the full exactness tuple,
 but reached **46.809 TFLOPS** in a 10-warmup/10-iteration screen. The smaller
 M stripe loses reuse and cannot repay its additional N-fragment issue work;
 normal 128x256 ownership is closed below delta-2.
+
+### 2026-08-24 hand-scheduled LDS swizzle screen
+
+The delta-2 register-phase schedule was regenerated with the source LDS
+swizzle changed from 16 to 8 and 32, leaving the tile shape, register phase,
+waits, barriers, and input contract unchanged. Both images passed the complete
+exactness tuple at two blocks/16 waves. Short screens reached 49.410 and
+49.439 TFLOPS respectively, but three fresh interleaved pairs for swizzle 32
+averaged 48.771 TFLOPS versus 48.994 for delta-2 controls. The alternate bank
+phases regress under sustained timing; swizzle 16 remains required.

@@ -4045,3 +4045,10 @@ occupancy and the exact packed output tuple, but measured 46.809 TFLOPS in a
 10/10 screen. This confirms that doubling N while halving the M stripe does not
 recover the leader; the 256x128 ownership geometry remains the only viable
 source shape in this family.
+
+The same hand schedule was then regenerated with LDS swizzle 8 and 32. Both
+variants were exact at unchanged 120-VGPR/two-block occupancy and produced
+49.410/49.439 TFLOPS in short screens. The swizzle-32 form lost in the fresh
+interleaved comparison (48.771 average versus 48.994 for delta-2 controls),
+so alternate bank phases are closed and the default swizzle 16 remains the
+research base.
