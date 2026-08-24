@@ -985,6 +985,20 @@ the hand-scheduled leader) was loadable and exact but only reached
 priority window is closed as an unsupported ISA/runtime path; no invalid
 timing is retained.
 
+### 2026-08-24 late-refill double-buffer screen
+
+The previously unqualified `WMMA_BP_DOUBLE_BUFFER_LATE=1` branch was built on
+the same 256x128 block/K16-prepacked input contract. It keeps complete A and B
+tiles in two LDS buffers and refills the inactive buffer later in the WMMA
+cluster. The image stayed exact in all five isolated launches, with the same
+normalized maximum error `0.018779343`, RMS `0.035428338`, and cosine
+`0.999977929` as the control.
+
+The extra LDS allocation reduced occupancy to one block/eight waves per CU.
+The five medians were **38.987, 39.192, 38.978, 39.197, and 38.856 TFLOPS**
+(39.042 average, 38.856 floor), so late refill cannot trade synchronization
+for enough residency and is closed for the square record shape.
+
 The companion `WMMA_BP_HALF_SWIZZLE=1` layout was also screened on the same
 256x128 packed shape. It passed the complete exactness tuple at unchanged
 two-block occupancy, but reached only 38.402 TFLOPS. Half-word LDS swizzling is

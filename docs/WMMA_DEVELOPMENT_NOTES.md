@@ -3933,3 +3933,12 @@ was loadable and exact, but its 41.84--42.26 TFLOPS results are the unscheduled
 source baseline, not evidence for the hand-scheduled leader. This closes
 priority control as a route to 50 and reinforces that an assembler-accepted
 instruction is not necessarily a usable gfx1151 runtime instruction.
+
+The remaining late-refill double-buffer branch was then built as a new packed
+dataflow: `WMMA_BP_DOUBLE_BUFFER_LATE=1` retains both complete operands in
+inactive/active LDS buffers and moves the refill later into the WMMA cluster.
+It passed the full exactness tuple in every isolated launch, but the second LDS
+tile reduced residency to one block/eight waves per CU. Five medians measured
+38.987, 39.192, 38.978, 39.197, and 38.856 TFLOPS (39.042 average, 38.856
+floor). The architecture is numerically sound but occupancy-bound and is
+closed for the 4096-square target.
