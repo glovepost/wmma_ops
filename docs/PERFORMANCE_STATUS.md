@@ -811,3 +811,8 @@ resident blocks per CU. The loader covered four A vectors per thread and one B
 vector per thread, preserving the full exactness tuple. It reached 42.962
 TFLOPS. The extra A traffic from splitting the N tile dominates the residency
 benefit, so the half-width geometry is closed.
+
+The complementary 256x192 geometry was rejected before benchmarking because
+192 does not divide the fixed 4096-wide problem. Its edge workgroup reached
+outside the packed/output bounds and faulted; this is a launch-contract failure,
+not a throughput measurement.

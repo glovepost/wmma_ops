@@ -3745,3 +3745,7 @@ A new 256x64 block geometry was implemented with an explicit four-vector A
 loader and four resident blocks per CU. After fixing the 32-lane wave mapping,
 it passed exact validation at 42.962 TFLOPS. Splitting N in half duplicates A
 traffic enough to erase the occupancy benefit, so this geometry is closed.
+
+The complementary 256x192 tile was not a valid benchmark geometry: 192 does
+not divide 4096, and its edge workgroup faulted before validation. No timing is
+recorded; non-divisible tiles require a separate bounds-safe harness.
