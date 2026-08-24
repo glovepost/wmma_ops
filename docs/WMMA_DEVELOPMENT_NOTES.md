@@ -38,6 +38,12 @@ FP16. It kept the 256x128, two-block/16-wave resource class and passed the full
 reference tuple, but measured 47.922 TFLOPS. The FP32 WMMA path is correct but
 slower than the retained FP16-accumulator schedule, so it is not promoted.
 
+The WMMA issue order was then transposed to A-major: each A fragment visited
+its four B fragments before advancing to the next A fragment. The source
+candidate retained two-block/16-wave occupancy and the exact output tuple, but
+measured 47.986 TFLOPS. This spacing change alone is slower than the retained
+hand-scheduled phase-delta kernel and was not promoted.
+
 # Code organization plan for `wmma_gemm.hip`
 
 This document outlines logical chunks of code that can be extracted into separate header files to improve maintainability and organization.

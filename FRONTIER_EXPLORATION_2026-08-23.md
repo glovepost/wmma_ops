@@ -1100,6 +1100,12 @@ conversion. It retained two-block/16-wave occupancy, passed the full exactness
 tuple, and reached 47.922 TFLOPS. This is below the FP16-accumulator leader,
 so the precision-only architecture is closed.
 
+An A-major traversal was screened next. Each A fragment visited all four B
+fragments before advancing, preserving the prepacked LDS contract and two
+resident blocks. It passed exact validation at 47.986 TFLOPS, below the
+49.035-TFLOPS leader; traversal order alone is not sufficient and the branch
+is closed.
+
 ## Decision
 
 The correct block/K-major p8 kernel with progressive refill, scalar-offset

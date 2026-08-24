@@ -777,6 +777,15 @@ therefore costs about 2.3% versus the 49.035-TFLOPS FP16-accumulator leader;
 precision alone does not provide the missing headroom. The temporary source
 override and binary were removed.
 
+### 2026-08-24 A-major WMMA traversal screen
+
+The prepacked 256x128 source loop was traversed A-major: each A fragment
+visited all four B fragments before advancing to the next A fragment. This
+changed accumulator dependency spacing while preserving the same LDS layout,
+two-block/16-wave occupancy, and exactness tuple. The candidate reached 47.986
+TFLOPS in the source screen, below the hand-scheduled 49.035-TFLOPS leader.
+The alternate traversal is closed as a standalone gain.
+
 ### 2026-08-24 source-level raw-buffer prefetch screen
 
 The transposed refill path was regenerated from source with raw-buffer loads
