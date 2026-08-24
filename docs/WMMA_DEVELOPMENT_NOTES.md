@@ -3942,3 +3942,12 @@ tile reduced residency to one block/eight waves per CU. Five medians measured
 38.987, 39.192, 38.978, 39.197, and 38.856 TFLOPS (39.042 average, 38.856
 floor). The architecture is numerically sound but occupancy-bound and is
 closed for the 4096-square target.
+
+The synchronization follow-up then tested a split producer/consumer barrier.
+ROCm 7.14 rejected `s_barrier_signal` and `s_barrier_wait` for gfx1151 during
+assembly, confirming that this hardware has no usable split-barrier path in
+the current toolchain. A related wait-order build (`WMMA_BP_WAIT_AFTER_BARRIER`)
+placed the VMEM wait after the workgroup barrier; it was loadable and exact, but
+five medians were 47.746, 47.619, 47.633, 47.385, and 47.335 TFLOPS (47.543
+average, 47.335 floor). The original wait-before-barrier schedule remains the
+control.

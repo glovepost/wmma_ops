@@ -999,6 +999,18 @@ The five medians were **38.987, 39.192, 38.978, 39.197, and 38.856 TFLOPS**
 (39.042 average, 38.856 floor), so late refill cannot trade synchronization
 for enough residency and is closed for the square record shape.
 
+### 2026-08-24 split-barrier and wait-order screen
+
+The proposed split producer/consumer barrier (`s_barrier_signal` /
+`s_barrier_wait`) was attempted on the packed path, but ROCm 7.14's gfx1151
+assembler rejected both instructions as unsupported. No image was produced.
+The related loadable schedule moved the VMEM wait after the workgroup barrier
+(`WMMA_BP_WAIT_AFTER_BARRIER=1`). It passed the exact tuple in five launches,
+but measured **47.746, 47.619, 47.633, 47.385, and 47.335 TFLOPS** (47.543
+average, 47.335 floor). The existing wait-before-barrier ordering remains
+strictly better; split signaling is an ISA dead end and wait-after-barrier is
+closed as a regression.
+
 The companion `WMMA_BP_HALF_SWIZZLE=1` layout was also screened on the same
 256x128 packed shape. It passed the complete exactness tuple at unchanged
 two-block occupancy, but reached only 38.402 TFLOPS. Half-word LDS swizzling is
