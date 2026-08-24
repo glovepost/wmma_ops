@@ -1131,6 +1131,12 @@ per CU. Its four-vector-per-thread A loader produced exact output at 42.962
 TFLOPS, but duplicated A traffic dominates the smaller LDS footprint. The
 half-width tile is closed.
 
+An SGPR placement screen shifted all non-kernarg scalar registers by aligned
+four- and eight-register gaps. Both forms were exact at unchanged two-block
+occupancy. The +4 form averaged about 48.73 TFLOPS; the +8 form reached
+49.099/49.172/49.083/49.030/48.880 (49.053 average). The result is not
+separated from package variation and the SGPR-only branch is closed.
+
 The complementary 256x192 tile was rejected before timing because the fixed
 4096-wide problem is not divisible by 192. Its edge workgroup faulted on the
 packed/output bounds, so it supplies no kernel performance result.

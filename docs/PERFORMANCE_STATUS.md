@@ -825,3 +825,13 @@ The complementary 256x192 geometry was rejected before benchmarking because
 192 does not divide the fixed 4096-wide problem. Its edge workgroup reached
 outside the packed/output bounds and faulted; this is a launch-contract failure,
 not a throughput measurement.
+
+### 2026-08-24 SGPR phase screen
+
+The delta-2 assembly was rebuilt with scalar registers at two aligned physical
+phases while staying inside the same 32-SGPR allocation class. The +4 phase
+used 26 SGPR and remained exact, but five medians averaged approximately 48.73
+TFLOPS. The +8 phase used 30 SGPR and also remained exact; medians were
+49.099, 49.172, 49.083, 49.030, and 48.880 TFLOPS (49.053 average, 48.880
+floor). These results track package variation rather than a separated gain,
+so SGPR placement is closed as a standalone optimization.

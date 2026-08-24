@@ -3752,6 +3752,12 @@ loader and four resident blocks per CU. After fixing the 32-lane wave mapping,
 it passed exact validation at 42.962 TFLOPS. Splitting N in half duplicates A
 traffic enough to erase the occupancy benefit, so this geometry is closed.
 
+The hand assembly’s scalar register placement was then shifted by aligned
+four- and eight-register gaps. Both variants passed the complete exactness
+tuple without changing VGPR occupancy. The +4 phase averaged about 48.73
+TFLOPS; the +8 phase averaged 49.053 with a 48.880 floor. Neither separates
+from package-sensitive delta-2 controls, so no SGPR phase is retained.
+
 The complementary 256x192 tile was not a valid benchmark geometry: 192 does
 not divide 4096, and its edge workgroup faulted before validation. No timing is
 recorded; non-divisible tiles require a separate bounds-safe harness.
