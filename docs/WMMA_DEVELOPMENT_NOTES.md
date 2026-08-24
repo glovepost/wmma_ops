@@ -3828,3 +3828,10 @@ window as a SALU/VALU overlap experiment. It stayed exact at the same resource
 tuple, but five processes measured 48.777, 48.740, 48.669, 48.624, and 48.788
 TFLOPS (48.720 average, 48.624 floor). The 49.094 short result was noise; this
 schedule change is closed.
+
+The K32-per-stage source specialization was screened next. Generic K2 launched
+at 44.350 TFLOPS but failed exactness (normalized error 1.356285863, cosine
+-0.000246312). Its dedicated K2 ring repaired the output but reached only
+41.345 TFLOPS. The current K32 staging contract is therefore not competitive;
+a future attempt would need a new packed-layout design rather than another
+ring variant.

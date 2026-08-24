@@ -941,3 +941,13 @@ fragments, and branch semantics unchanged. The image stayed exact at
 120 VGPR/two-block occupancy. Five fresh processes measured 48.777, 48.740,
 48.669, 48.624, and 48.788 TFLOPS (48.720 average, 48.624 floor), so the
 49.094 short screen was package variation and the SALU placement is closed.
+
+### 2026-08-24 K32 stage/ring screen
+
+The source K2 specialization (`WMMA_BP_K_SLICES=2`) was built for the
+256x128 packed record shape to publish two WMMA K16 slices per stage. It
+launched at 44.350 TFLOPS but failed the numerical gate badly (normalized
+maximum error 1.356285863, cosine -0.000246312), indicating an incompatible
+packing/accumulator contract in the generic K2 path. The dedicated K2 ring
+variant repaired exactness, but reached only 41.345 TFLOPS. K32 staging does
+not expose a route toward 50 TFLOPS without a new packing implementation.
