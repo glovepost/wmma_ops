@@ -44,6 +44,11 @@ candidate retained two-block/16-wave occupancy and the exact output tuple, but
 measured 47.986 TFLOPS. This spacing change alone is slower than the retained
 hand-scheduled phase-delta kernel and was not promoted.
 
+The output epilogue was specialized for the divisible 4096x4096 benchmark so
+each fragment stores directly without per-element bounds checks. It remained
+exact at 47.850 TFLOPS with two resident blocks, which shows that tail
+predicate overhead is not the missing 1.8%. The specialization was not kept.
+
 # Code organization plan for `wmma_gemm.hip`
 
 This document outlines logical chunks of code that can be extracted into separate header files to improve maintainability and organization.

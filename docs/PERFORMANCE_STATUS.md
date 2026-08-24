@@ -786,6 +786,14 @@ two-block/16-wave occupancy, and exactness tuple. The candidate reached 47.986
 TFLOPS in the source screen, below the hand-scheduled 49.035-TFLOPS leader.
 The alternate traversal is closed as a standalone gain.
 
+### 2026-08-24 full-tile direct-store epilogue
+
+Because the benchmark shape is exactly divisible by the 256x128 tile, a source
+variant replaced the generic bounds-checked FP16 epilogue with unconditional
+full-tile stores. It retained exact output and two-block/16-wave occupancy but
+reached 47.850 TFLOPS, below the 49.035-TFLOPS leader. Edge-predicate removal
+does not account for the remaining gap; the temporary variant was removed.
+
 ### 2026-08-24 source-level raw-buffer prefetch screen
 
 The transposed refill path was regenerated from source with raw-buffer loads

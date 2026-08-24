@@ -1106,6 +1106,11 @@ resident blocks. It passed exact validation at 47.986 TFLOPS, below the
 49.035-TFLOPS leader; traversal order alone is not sufficient and the branch
 is closed.
 
+The full-tile epilogue was then specialized for the exact divisible benchmark:
+unconditional FP16 stores replaced the generic bounds-checked path. It passed
+exact validation at 47.850 TFLOPS with two resident blocks, below the leader;
+edge-predicate removal alone is closed as a route to 50.
+
 ## Decision
 
 The correct block/K-major p8 kernel with progressive refill, scalar-offset
