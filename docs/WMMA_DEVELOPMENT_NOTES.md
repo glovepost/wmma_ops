@@ -3758,6 +3758,11 @@ tuple without changing VGPR occupancy. The +4 phase averaged about 48.73
 TFLOPS; the +8 phase averaged 49.053 with a 48.880 floor. Neither separates
 from package-sensitive delta-2 controls, so no SGPR phase is retained.
 
+The A-side LDS base was then shifted by +8 and +16 bytes in every initial and
+refill access. Both forms were exact. +8 fell to 35.843 TFLOPS; +16 averaged
+about 48.997 TFLOPS across five processes. The bank phase is load-bearing but
+not a standalone source of headroom, so the A-LDS phase branch is closed.
+
 The complementary 256x192 tile was not a valid benchmark geometry: 192 does
 not divide 4096, and its edge workgroup faulted before validation. No timing is
 recorded; non-divisible tiles require a separate bounds-safe harness.

@@ -1137,6 +1137,11 @@ occupancy. The +4 form averaged about 48.73 TFLOPS; the +8 form reached
 49.099/49.172/49.083/49.030/48.880 (49.053 average). The result is not
 separated from package variation and the SGPR-only branch is closed.
 
+An A-LDS phase screen shifted every A load/store base by +8 and +16 bytes.
+Both candidates were exact; +8 reached 35.843 TFLOPS and +16 reached
+48.958/49.145/48.962/48.928/48.989 (about 48.997 average). The A bank phase
+is load-bearing but not a sustained improvement, so this branch is closed.
+
 The complementary 256x192 tile was rejected before timing because the fixed
 4096-wide problem is not divisible by 192. Its edge workgroup faulted on the
 packed/output bounds, so it supplies no kernel performance result.

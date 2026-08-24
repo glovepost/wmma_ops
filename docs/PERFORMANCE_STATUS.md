@@ -835,3 +835,11 @@ TFLOPS. The +8 phase used 30 SGPR and also remained exact; medians were
 49.099, 49.172, 49.083, 49.030, and 48.880 TFLOPS (49.053 average, 48.880
 floor). These results track package variation rather than a separated gain,
 so SGPR placement is closed as a standalone optimization.
+
+### 2026-08-24 A-side LDS phase screen
+
+The hand assembly’s A LDS base was shifted consistently in both initial and
+refill stores/loads. The +8-byte phase remained exact but collapsed to 35.843
+TFLOPS; the +16-byte phase remained exact with medians 48.958, 49.145, 48.962,
+48.928, and 48.989 TFLOPS (about 48.997 average). A-bank phase is load-bearing
+but offers no sustained gain; the B/A phase-composition branch is closed.
