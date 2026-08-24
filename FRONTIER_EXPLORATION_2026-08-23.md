@@ -927,6 +927,12 @@ promising at 49.117 TFLOPS, but failed the numerical gate catastrophically:
 normalized maximum error 137.345592071 and cosine 0.693088403. The existing
 wait thresholds are therefore load-bearing and remain unchanged.
 
+A synchronization reduction removed only the `lgkmcnt(0)` wait immediately
+before the publish barrier, retaining the VMEM wait and both workgroup
+barriers. It remained exact with unchanged resources but reached 48.904
+TFLOPS. The wait is therefore not redundant on gfx1151; the original
+pre-barrier retirement sequence remains the control.
+
 ## Decision
 
 The correct block/K-major p8 kernel with progressive refill, scalar-offset

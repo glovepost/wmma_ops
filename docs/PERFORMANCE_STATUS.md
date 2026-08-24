@@ -588,6 +588,10 @@ sample but failed correctness (`normalized_max_error=137.345592071`, cosine
 `0.693088403`). The current wait thresholds are load-bearing and remain
 unchanged.
 
+Removing only the pre-publish `lgkmcnt(0)` wait, while retaining the VMEM
+wait and both barriers, remained exact but reached 48.904 TFLOPS. The wait is
+not redundant on gfx1151 and remains part of the control sequence.
+
 ## Record protocol
 
 Use this protocol before promoting a result in the README:
