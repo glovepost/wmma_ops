@@ -1031,6 +1031,15 @@ also closed the remaining prebuilt refill variants: B-first and A0/B/A1 were
 48.689 and 48.662 TFLOPS, scheduler priority was 42.253, and hybrid-A/B forms
 were 43.768--44.479 TFLOPS; all valid outputs were exact, but all regressed.
 
+The register-pressure follow-up delayed the final B global load until after the
+hot-loop WMMA group and reused lower B-fragment registers for the LDS store
+(`bp-register-pack-b-after`). It faulted on its first launch with a GPU
+page-not-present memory-access fault, before producing validation output. The
+unchanged delta-2 control in the same lock window was exact at 48.718 TFLOPS,
+so the fault belongs to the candidate's altered live range/issue order. The
+repack is closed; the tail B fragment still occupies the high VGPR range and no
+allocation-class reduction was achieved.
+
 ## Decision
 
 The correct block/K-major p8 kernel with progressive refill, scalar-offset

@@ -668,6 +668,15 @@ closed B-first (48.689), A0/B/A1 (48.662), scheduler priority (42.253), and
 hybrid-A/B (43.768--44.479) forms. Every valid form was exact, but none
 advanced delta-2.
 
+A final register-pressure probe delayed the last B global load until after the
+hot-loop WMMA group and reused lower B-fragment registers for the LDS store.
+`bp-register-pack-b-after` faulted on its first launch with a GPU page-not-present
+memory-access fault, before it could pass the differential gate. The same-lock
+delta-2 control measured 48.718 TFLOPS and remained exact. The probe is closed:
+the tail B fragment still requires the high VGPR range, so the transformation
+did not lower the allocation class and introduced an unsafe live-range/issue
+ordering.
+
 ## Record protocol
 
 Use this protocol before promoting a result in the README:
