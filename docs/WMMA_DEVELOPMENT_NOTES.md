@@ -3965,3 +3965,9 @@ five launches and reported four blocks/16 waves, but medians were 41.166,
 40.840, 40.764, 40.721, and 40.902 TFLOPS (40.879 average, 40.721 floor).
 The smaller tile's traversal/refill cost dominates, so late-B1 is closed as a
 route to the 50-TFLOPS target.
+
+The complementary one-sided B producer was then built with
+`WMMA_BP_HYBRID_B_PINGPONG=1`, leaving A in the active buffer. It stayed exact
+at two blocks/16 waves, but five medians were 45.090, 45.107, 44.805, 44.976,
+and 44.742 TFLOPS (44.944 average, 44.742 floor). B-side ping-pong does not
+recover the hand-scheduled leader's gap and is closed as an independent path.

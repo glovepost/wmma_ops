@@ -1033,6 +1033,15 @@ blocks/16 waves per CU. Medians were **41.166, 40.840, 40.764, 40.721, and
 block traversal and refill work outweigh the late B overlap; this ownership
 specialization is closed well below the 256x128 leader.
 
+### 2026-08-24 hybrid-B ping-pong screen
+
+The complementary one-sided producer was built with B ping-pong and A left in
+the active single buffer (`WMMA_BP_HYBRID_B_PINGPONG=1`) on the 256x128 packed
+geometry. It remained exact in all five launches at two blocks/16 waves per
+CU. Medians were **45.090, 45.107, 44.805, 44.976, and 44.742 TFLOPS**
+(44.944 average, 44.742 floor). B-side overlap is no better than the grouped
+A-side schedule and is closed as a standalone route to 50.
+
 The companion `WMMA_BP_HALF_SWIZZLE=1` layout was also screened on the same
 256x128 packed shape. It passed the complete exactness tuple at unchanged
 two-block occupancy, but reached only 38.402 TFLOPS. Half-word LDS swizzling is
