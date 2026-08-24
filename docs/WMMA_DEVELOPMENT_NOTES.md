@@ -3381,3 +3381,75 @@ addressed 64-bit halves even when the latter reports eight more active waves.
 Native refill stores do not rescue it, isolating the regression to the paired
 read schedule rather than the store handoff. Do not revisit the p8 offset
 limit without a new LDS instruction or a different physical fragment layout.
+
+A follow-up tried to collapse the vector-offset MUBUF form's two independent
+pointer increments into one dual-issue VALU instruction. The gfx1151 assembler
+accepts the existing `v_dual_mov_b32 :: v_dual_add_nc_u32` pair but rejects
+`v_dual_add_nc_u32 :: v_dual_add_nc_u32` as unsupported. Dual-issue slots are
+opcode-pair constrained; this recurrence cannot be compressed unchanged and
+was rejected before GPU use.
+
+### 2026-08-23: Progressive VMEM-to-LDS commit after the barrier
+
+The p8 leader issues three cooperative refill operations in the order A0, A1,
+B. Its generated loop contained two consecutive full `vmcnt(0)` waits before
+the overwrite barrier: one from the explicit source fence and another inserted
+by LLVM. Moving only the source fence did not move the compiler wait, so the
+experiment required a deterministic assembly transform.
+
+`tools/patch_progressive_commit_asm.py` replaces that handoff with:
+
+```asm
+s_barrier
+s_waitcnt vmcnt(2)
+ds_store_b128  ; A0
+s_waitcnt vmcnt(1)
+ds_store_b128  ; A1
+s_waitcnt vmcnt(0)
+ds_store_b128  ; B
+s_waitcnt vmcnt(0) lgkmcnt(0)
+s_barrier
+```
+
+Program order makes each threshold unambiguous: `vmcnt(2)` guarantees the
+oldest A0 load, `vmcnt(1)` guarantees A1 as well, and `vmcnt(0)` guarantees B.
+The first barrier still prevents overwriting LDS while any wave consumes the
+old tile; the final LDS wait and second barrier still publish the complete new
+tile. The result assembles at 118 VGPR, 22 SGPR, 18 KiB LDS, and zero spills,
+and reports two blocks/16 waves.
+
+The full rocBLAS-reference tuple passed in every run. A short bracket produced
+48.132/48.411 TFLOPS versus 48.158/48.193 controls. A longer interleaved
+`C,X,C,X,C,X,C,X,C` screen produced controls of 47.785, 47.861, 47.734,
+47.778, and 47.525 TFLOPS and candidates of 47.970, 48.124, 47.908, and
+47.789. Pairing each candidate with its immediately preceding control gives
+47.948 versus 47.790 TFLOPS, **+0.33%**. The closing control documents the
+package drift but is not substituted for a candidate's preceding control.
+
+Retain progressive commit as a composable scheduling primitive, not a
+promotion. It is a small repeatable improvement with no resource change, on
+the same scale as scalar-offset MUBUF recurrence.
+
+The combined transform then passed the exactness gate at the same 118 VGPR,
+22 SGPR, 18 KiB LDS, zero spills, and two reported blocks/16 waves. The short
+bracket was:
+
+| Form | TFLOPS | Average |
+|---|---:|---:|
+| P8 control | 48.184 / 48.332 | 48.258 |
+| Progressive only | 48.599 / 48.323 | 48.461 |
+| Progressive + scalar-offset MUBUF | 48.768 / 48.635 | 48.701 |
+
+A longer `C,X,P,X,C,X,P,X,C` screen confirmed rather than erased the signal:
+
+| Form | TFLOPS | Average |
+|---|---:|---:|
+| P8 control | 47.867 / 47.752 / 47.648 | 47.756 |
+| Progressive only | 47.855 / 47.769 | 47.812 |
+| Progressive + scalar-offset MUBUF | 48.317 / 47.990 / 48.138 / 48.247 | 48.173 |
+
+The combined form is +0.75% over progressive-only and +0.87% over the controls
+in that pass. All nine runs reproduced the full rocBLAS tuple. This establishes
+additivity and makes the combined schedule the next research base, but it does
+not replace the 48.614-TFLOPS sustained record: the package state was lower and
+no sample reached the 50-TFLOPS promotion gate.

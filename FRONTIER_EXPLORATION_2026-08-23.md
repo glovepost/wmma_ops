@@ -630,6 +630,40 @@ the result worse, so the read transaction--not merely the handoff store--is
 the closed frontier. The shifted-base transform is retained to prevent the
 offset-encoding limitation from being mistaken for an untested opportunity.
 
+### Progressive post-barrier refill commit
+
+The retained single-buffer loop originally retires all three refill VMEM
+operations before the overwrite barrier, then writes both A vectors and the B
+vector to LDS. A source-level attempt to move the wait failed because LLVM
+inserted its own `s_waitcnt vmcnt(0)` ahead of the barrier. The reproducible
+assembly transform in `tools/patch_progressive_commit_asm.py` removes both
+full waits and commits completed operations in program order after the
+barrier: `vmcnt(2)` then A0, `vmcnt(1)` then A1, and `vmcnt(0)` then B. The
+final LDS wait and publish barrier remain unchanged.
+
+The transformed kernel is exact at 118 VGPR, 22 SGPR, 18 KiB LDS, zero spills,
+and the same reported two blocks/16 waves as the leader. A short bracket
+reached 48.132/48.411 TFLOPS against 48.158/48.193 controls. Four longer
+interleaved runs averaged **47.948 TFLOPS** against their immediately preceding
+controls at **47.790 TFLOPS**, a repeatable **+0.158 TFLOPS (+0.33%)** signal.
+Every run reproduced the full rocBLAS error tuple.
+
+This is an occupancy-neutral code-generation building block, not a new record.
+It shows that the refill queue can make partial forward progress across the
+overwrite barrier without changing the memory contract, but its gain is the
+same small scale as scalar-offset MUBUF addressing. The two changes are
+independent, and their combined assembly confirms that the gains compose. A
+short bracket averaged 48.701 TFLOPS for progressive commit plus scalar-offset
+MUBUF, versus 48.461 for progressive commit and 48.258 for the controls.
+
+The longer interleaved screen made the signal clearer. Four combined runs
+reached 48.317/47.990/48.138/48.247 TFLOPS, averaging **48.173**. Two
+progressive-only runs averaged 47.812, and three controls averaged 47.756.
+The combination therefore gained **0.75%** over progressive-only and **0.87%**
+over the same-pass controls while preserving exactness and resources. This is
+the new research base, but not a promoted result: the pass ran below the
+historical 48.614-TFLOPS sustained leader and no sample reached 50 TFLOPS.
+
 ## Decision
 
 The correct block/K-major p8 kernel materially exceeds the original-layout

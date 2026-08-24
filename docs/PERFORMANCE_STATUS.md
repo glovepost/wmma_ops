@@ -337,6 +337,19 @@ TFLOPS versus 47.914/47.991 controls. Restoring native b128 stores did not
 rescue the paired reads: it reached 43.442/42.041 versus same-pass
 44.932/45.055 controls. The native p8 `ds_load_b128` schedule remains best.
 
+An assembly-qualified progressive refill handoff is the next small positive
+signal. It moves the refill waits after the overwrite barrier and commits A0,
+A1, and B at `vmcnt(2)`, `vmcnt(1)`, and `vmcnt(0)` respectively. The kernel
+remains exact at 118 VGPR, 22 SGPR, 18 KiB LDS, zero spills, and two reported
+blocks/16 waves. Four longer interleaved runs averaged 47.948 TFLOPS versus
+47.790 for their immediately preceding controls (+0.33%). Like scalar-offset
+MUBUF, this is retained as a composable scheduling improvement rather than a
+record. Combining the two exact 118-VGPR transforms averaged 48.173 TFLOPS in
+a longer interleaved screen, versus 47.812 for progressive-only and 47.756 for
+the controls: +0.75% and +0.87%, respectively. The combined schedule becomes
+the next research base, but the absolute pass remained below the historical
+48.614-TFLOPS leader and the sustained 50-TFLOPS gate remains open.
+
 At 256 GB/s, the corresponding compute-to-memory ridge point is about
 232 FLOP/byte (`59.4e12 / 256e9`), not 106 FLOP/byte. Both inputs should be
 replaced by observed clocks and sustained bandwidth when making a measured
