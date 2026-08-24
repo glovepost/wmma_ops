@@ -3656,3 +3656,21 @@ timing blocks per process. Delta-2 base medians were 49.173/49.162/48.910/
 48.830. Full validation passed every process, but the row-order candidate lost
 to its immediately preceding control in all five pairs. Close row-order
 permutations as noise and retain the unpermuted delta-2 phase.
+
+### 2026-08-24: paired-K IU4 pipeline
+
+The first positive new architecture after the FP16 delta-2 screens is an
+isolated paired-K pipeline for the linear W4A4 contract. With
+`-DIU4_PAIR_K=1`, the kernel keeps two K16 slices in four rotating LDS slots,
+loads the next pair while the current pair executes, and synchronizes once per
+pair boundary. It uses 103 VGPR, 18 SGPR, 8,192 bytes of LDS, and no spills.
+
+At 4096 cubed, five interleaved fresh candidate/control pairs measured
+90.527/90.208/89.381/90.599/90.129 INT4 TOPS for the paired candidate (90.169
+average, 89.381 floor), versus 84.961/84.928/84.942/84.829/85.138 for the
+one-slice control (84.960 average). Every candidate and control produced zero
+mismatches over all 16,777,216 INT32 outputs. This exceeds the 50-operations/s
+threshold only under the separate integer contract; it does not alter the
+49.035-TFLOPS FP16 leader. The four-slot/pair-boundary schedule is nevertheless
+a useful architecture to revisit with a smaller FP16 tile or a different
+producer/consumer partition.

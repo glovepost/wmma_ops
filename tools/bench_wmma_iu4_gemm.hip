@@ -45,6 +45,9 @@ static_assert(kBlockM == 128 || kBlockM == 256);
 #ifndef IU4_WAVE_COLUMNS
 #define IU4_WAVE_COLUMNS 4
 #endif
+#ifndef IU4_PAIR_K
+#define IU4_PAIR_K 0
+#endif
 constexpr int kWaveColumns = IU4_WAVE_COLUMNS;
 static_assert(kWaveColumns == 2 || kWaveColumns == 4);
 constexpr int kWaveRows = (kThreads / 32) / kWaveColumns;
@@ -69,8 +72,9 @@ __global__ __launch_bounds__(kThreads) void iu4_gemm(
     int n,
     int k)
 {
-    __shared__ uint32_t a_lds[2][kBlockM][kLdsStrideWords];
-    __shared__ uint32_t b_lds[2][kBlockN][kLdsStrideWords];
+    constexpr int kLdsBuffers = IU4_PAIR_K ? 4 : 2;
+    __shared__ uint32_t a_lds[kLdsBuffers][kBlockM][kLdsStrideWords];
+    __shared__ uint32_t b_lds[kLdsBuffers][kBlockN][kLdsStrideWords];
 
     const int tid = static_cast<int>(threadIdx.x);
     const int lane = tid & 31;
@@ -98,11 +102,119 @@ __global__ __launch_bounds__(kThreads) void iu4_gemm(
     const int cooperative_word = tid & 1;
     b_lds[0][cooperative_row][cooperative_word]
         = b[b_block + static_cast<size_t>(tid)];
+    if constexpr(IU4_PAIR_K)
+    {
+        #pragma unroll
+        for(int load = 0; load < kCooperativeAWords; ++load)
+        {
+            const int flat = tid * kCooperativeAWords + load;
+            a_lds[1][flat >> 1][flat & 1]
+                = a[a_block + static_cast<size_t>(kBlockM * 2 + flat)];
+        }
+        b_lds[1][cooperative_row][cooperative_word]
+            = b[b_block + static_cast<size_t>(kBlockN * 2 + tid)];
+    }
     __builtin_amdgcn_s_waitcnt(0);
     __syncthreads();
 
     i32x8 accum[kWaveTilesM][kWaveTilesN] = {};
 
+    if constexpr(IU4_PAIR_K)
+    {
+        // Keep two complete K16 slices resident while the next pair is
+        // fetched into the unused LDS slots.  The only barrier is at the
+        // pair boundary, so the two WMMA groups share one publication cost.
+        for(int pair_tile = 0; pair_tile < k_tiles; pair_tile += 2)
+        {
+            const int current = ((pair_tile / 2) & 1) * 2;
+            const int next = current ^ 2;
+            const bool has_next_pair = pair_tile + 2 < k_tiles;
+            uint32_t staged_a0[kCooperativeAWords]{};
+            uint32_t staged_a1[kCooperativeAWords]{};
+            uint32_t staged_b0 = 0;
+            uint32_t staged_b1 = 0;
+            if(has_next_pair)
+            {
+                const size_t tile0 = static_cast<size_t>(pair_tile + 2)
+                    * kBlockM * 2;
+                const size_t tile1 = static_cast<size_t>(pair_tile + 3)
+                    * kBlockM * 2;
+                #pragma unroll
+                for(int load = 0; load < kCooperativeAWords; ++load)
+                {
+                    const int flat = tid * kCooperativeAWords + load;
+                    staged_a0[load] = a[a_block + tile0
+                        + static_cast<size_t>(flat)];
+                    staged_a1[load] = a[a_block + tile1
+                        + static_cast<size_t>(flat)];
+                }
+                const size_t b_tile0 = static_cast<size_t>(pair_tile + 2)
+                    * kBlockN * 2;
+                const size_t b_tile1 = static_cast<size_t>(pair_tile + 3)
+                    * kBlockN * 2;
+                staged_b0 = b[b_block + b_tile0 + static_cast<size_t>(tid)];
+                staged_b1 = b[b_block + b_tile1 + static_cast<size_t>(tid)];
+            }
+
+            for(int tile_offset = 0; tile_offset < 2; ++tile_offset)
+            {
+                const int tile = current + tile_offset;
+                i32x2 a_frag[kWaveTilesM];
+                i32x2 b_frag[kWaveTilesN];
+                #pragma unroll
+                for(int wm = 0; wm < kWaveTilesM; ++wm)
+                {
+                    const int row = wave_row * kWaveTilesM * 16
+                        + wm * 16 + lane16;
+                    a_frag[wm][0]
+                        = static_cast<int32_t>(a_lds[tile][row][0]);
+                    a_frag[wm][1]
+                        = static_cast<int32_t>(a_lds[tile][row][1]);
+                }
+                #pragma unroll
+                for(int wn = 0; wn < kWaveTilesN; ++wn)
+                {
+                    const int column = wave_column * kWaveTilesN * 16
+                        + wn * 16 + lane16;
+                    b_frag[wn][0]
+                        = static_cast<int32_t>(b_lds[tile][column][0]);
+                    b_frag[wn][1]
+                        = static_cast<int32_t>(b_lds[tile][column][1]);
+                }
+                asm volatile("s_waitcnt lgkmcnt(0)" ::: "memory");
+                #pragma unroll
+                for(int wm = 0; wm < kWaveTilesM; ++wm)
+                {
+                    #pragma unroll
+                    for(int wn = 0; wn < kWaveTilesN; ++wn)
+                    {
+                        accum[wm][wn]
+                            = __builtin_amdgcn_wmma_i32_16x16x16_iu4_w32(
+                                true, a_frag[wm], true, b_frag[wn],
+                                accum[wm][wn], false);
+                    }
+                }
+            }
+
+            if(has_next_pair)
+            {
+                asm volatile("s_waitcnt vmcnt(0)" ::: "memory");
+                #pragma unroll
+                for(int load = 0; load < kCooperativeAWords; ++load)
+                {
+                    const int flat = tid * kCooperativeAWords + load;
+                    a_lds[next][flat >> 1][flat & 1] = staged_a0[load];
+                    a_lds[next + 1][flat >> 1][flat & 1] = staged_a1[load];
+                }
+                b_lds[next][cooperative_row][cooperative_word] = staged_b0;
+                b_lds[next + 1][cooperative_row][cooperative_word] = staged_b1;
+                asm volatile("s_waitcnt lgkmcnt(0)" ::: "memory");
+                __syncthreads();
+            }
+        }
+    }
+    else
+    {
     #pragma unroll 1
     for(int k_tile = 0; k_tile < k_tiles; ++k_tile)
     {
@@ -177,6 +289,7 @@ __global__ __launch_bounds__(kThreads) void iu4_gemm(
             asm volatile("s_waitcnt lgkmcnt(0)" ::: "memory");
             __syncthreads();
         }
+    }
     }
 
     #pragma unroll

@@ -258,6 +258,17 @@ in one exclusive pass favored four wave columns: 85.063 and 85.907 TOPS versus
 84.992 and 84.182 for two wave columns.  A padded 12-byte LDS row reached only
 83.416 TOPS, and a 256x128 block rose to 159 VGPR and fell to 78.367 TOPS.
 
+The paired-K IU4 experiment keeps two K16 slices in four rotating LDS slots,
+stages the following pair while the current pair computes, and publishes once
+per pair. With `-DIU4_PAIR_K=1` it compiled at 103 VGPR, 18 SGPR, 8,192 bytes
+of LDS, and zero spills. Five interleaved fresh pairs measured
+90.527/90.208/89.381/90.599/90.129 INT4 TOPS (90.169 average, 89.381 floor),
+with zero mismatches across all 16,777,216 INT32 outputs. The one-slice control
+measured 84.961/84.928/84.942/84.829/85.138 (84.960 average). This is a
+substantial integer-kernel improvement, not a promotion of the FP16 TFLOPS
+record; translating it to FP16 requires a different LDS/register budget and
+must be measured independently.
+
 This result demonstrates that a full data-moving IU4 kernel can exceed the
 50-operations/s target, but it remains a distinct integer contract.  It is not
 eligible for the FP16 TFLOPS table or record gate.
