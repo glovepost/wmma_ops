@@ -1290,3 +1290,12 @@ dual-VALU bank pairing) assembled across safe boundaries 33--81. The images
 were exact but moved to three blocks/24 waves and measured 41.106--41.383
 TFLOPS in 5/5 screens. DPP register shifts therefore do not approach the hand
 leader; the unshifted source DPP image remains the only useful reference.
+
+The 4096-square record was also given a fixed-grid mapper that replaces the
+general swizzle/division prologue with direct `blockIdx.x` row/column shifts.
+The row-major image stayed exact at 120 VGPR/two-block occupancy and briefly
+reached 49.596 TFLOPS, but fresh interleaved timing averaged 48.536 TFLOPS
+versus 48.773 for controls. A hand reconstruction of the default XOR-snake
+map with scalar bit arithmetic produced incorrect output (normalized error
+1.000000), so fixed traversal is closed without a verified equivalent cache
+mapping.

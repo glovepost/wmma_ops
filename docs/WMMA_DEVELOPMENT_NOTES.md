@@ -4083,3 +4083,11 @@ the four-bank dual-VALU pairing that delta-2 violates. Safe boundaries from
 33 through 81 all assembled and stayed exact, but the resulting 121-VGPR
 images admitted three blocks/24 waves and reached only 41.106--41.383 TFLOPS
 in 5/5 screens. This closes DPP register-phase shifts as a route to 50.
+
+The mapper prologue was then specialized for the exact 16x32 record grid.
+Direct row-major shifts cut the integer setup and stayed exact, but fresh
+interleaved comparisons averaged 48.536 TFLOPS versus 48.773 controls after a
+49.596 short screen. A hand reconstruction of the source column XOR-snake map
+was not exact (normalized error 1.000000), showing that the cache traversal
+contract is not captured by the naive scalar formula. Fixed-grid mapping is
+closed without a verified equivalent traversal.
