@@ -61,6 +61,12 @@ five-process qualification measured 48.839, 48.698, 48.749, 48.649, and
 48.712 TFLOPS (48.729 average, 48.649 floor). The isolated 49.059 result was
 noise; the retained delta-2 image remains faster and more stable.
 
+The opposite three-bank cycle was screened as well. It was loader-valid and
+exact, but five processes measured 48.782, 48.721, 48.642, 48.722, and 48.733
+TFLOPS (48.720 average, 48.642 floor). Both cycle directions are now closed;
+future work should target synchronization or data movement rather than
+accumulator placement.
+
 The next physical-layout screen cyclically rotated three of the four FP16
 accumulator banks while preserving the v0-based epilogue bank. Both rotations
 were rejected by the gfx1151 loader before occupancy/correctness, whereas the

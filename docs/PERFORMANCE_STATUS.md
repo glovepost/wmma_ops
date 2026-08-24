@@ -926,3 +926,9 @@ the same 120-VGPR/two-block occupancy. A five-process, 20-warmup/100-iteration
 qualification measured 48.839, 48.698, 48.749, 48.649, and 48.712 TFLOPS
 (48.729 average, 48.649 floor). The first 49.059 short screen was therefore
 package noise; the composed permutation is not promoted over delta-2.
+
+The opposite three-bank cycle was also constructed by composing the pair-swap
+transform (17<->49 followed by 17<->33). It was loader-valid and exact, but
+its five-process qualification measured 48.782, 48.721, 48.642, 48.722, and
+48.733 TFLOPS (48.720 average, 48.642 floor). Both cycle directions are
+therefore closed; accumulator placement has no measured path to 50 TFLOPS.
