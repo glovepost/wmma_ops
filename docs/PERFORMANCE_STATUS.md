@@ -977,6 +977,12 @@ contain one `buffer_load_b128 v[120:123]`, declared 128 VGPR, and still failed
 the exactness gate at 49.886 TFLOPS. This confirms the producer is not rescued
 by the earlier script correction; no timing from this family is promotable.
 
+The complementary early-A staging image moved A vectors into v120:v127 and
+declared 128 VGPR. It hung before returning occupancy or validation and was
+terminated under the exclusive-run watchdog; no timing or correctness result
+is recorded. This is a synchronization/launch failure, not evidence of an
+A-prefetch benefit.
+
 ### 2026-08-24 asymmetric LDS padding screen
 
 Complementary A/B stride pairs were tested on the packed 256x128 source

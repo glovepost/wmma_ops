@@ -3852,6 +3852,11 @@ with the relocated load verified present, 128-VGPR metadata, and the intended
 copy/wait sequence. It still failed exactness at 49.886 TFLOPS, confirming that
 the producer idea itself—not just the first script artifact—is invalid.
 
+The complementary early-A high-register staging image hung before producing
+occupancy or validation output and was terminated. It has no timing result and
+is rejected as a synchronization/launch failure rather than a performance
+candidate.
+
 Complementary asymmetric A/B padding pairs (4/12, 12/4, 2/14, 14/2, 6/10,
 10/6) all stayed exact but measured only 25.755--27.389 TFLOPS. The stride
 phases cannot be decoupled without upsetting the WMMA/LDS access pattern, so
