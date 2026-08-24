@@ -3822,3 +3822,9 @@ five processes, so final-tile B placement is closed.
 The complementary 256x192 tile was not a valid benchmark geometry: 192 does
 not divide 4096, and its edge workgroup faulted before validation. No timing is
 recorded; non-divisible tiles require a separate bounds-safe harness.
+
+An independent loop-counter decrement was moved into the first WMMA issue
+window as a SALU/VALU overlap experiment. It stayed exact at the same resource
+tuple, but five processes measured 48.777, 48.740, 48.669, 48.624, and 48.788
+TFLOPS (48.720 average, 48.624 floor). The 49.094 short result was noise; this
+schedule change is closed.

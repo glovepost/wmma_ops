@@ -932,3 +932,12 @@ transform (17<->49 followed by 17<->33). It was loader-valid and exact, but
 its five-process qualification measured 48.782, 48.721, 48.642, 48.722, and
 48.733 TFLOPS (48.720 average, 48.642 floor). Both cycle directions are
 therefore closed; accumulator placement has no measured path to 50 TFLOPS.
+
+### 2026-08-24 SALU-in-WMMA-window screen
+
+The independent loop-counter decrement was moved from immediately before the
+first WMMA issue into the first WMMA group, leaving all LDS waits, barriers,
+fragments, and branch semantics unchanged. The image stayed exact at
+120 VGPR/two-block occupancy. Five fresh processes measured 48.777, 48.740,
+48.669, 48.624, and 48.788 TFLOPS (48.720 average, 48.624 floor), so the
+49.094 short screen was package variation and the SALU placement is closed.
