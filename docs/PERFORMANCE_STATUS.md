@@ -645,6 +645,10 @@ Removing the remaining `vmcnt(4)`/`vmcnt(2)` fences reached 39.039 TFLOPS but
 failed correctness (`normalized_max_error=0.324106677`, cosine 0.992856290).
 Direct-B remains latency-bound.
 
+Pair-local A handoff variants reached 36.829–44.185 TFLOPS, all exact. Pair
+signaling costs more than the retained workgroup barrier, so producer/consumer
+handoff is closed for this square workload.
+
 ## Record protocol
 
 Use this protocol before promoting a result in the README:

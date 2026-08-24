@@ -999,6 +999,11 @@ remaining `vmcnt(4)`/`vmcnt(2)` fences reached 39.039 TFLOPS but failed the
 numerical gate (`normalized_max_error=0.324106677`, cosine 0.992856290).
 Direct-B remains latency-bound and is not a route to 50 TFLOPS.
 
+Pair-local A handoff variants were screened as a producer/consumer alternative:
+the base, cyclic, and cyclic-prefetch forms reached 44.185, 41.254, and
+36.829 TFLOPS respectively, all exact. Pair-level signaling costs more than
+the retained workgroup barrier, so this branch is closed.
+
 ## Decision
 
 The correct block/K-major p8 kernel with progressive refill, scalar-offset
