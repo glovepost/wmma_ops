@@ -653,6 +653,10 @@ Wave-private/staging variants reached 35.850–37.492 TFLOPS; the 128×128 form
 also failed the numerical threshold with normalized error 0.087310902. Lower
 cooperative LDS sharing or occupancy is not competitive with delta-2.
 
+A 1,000-warmup qualification of delta-2 measured 49.099 TFLOPS over five
+timing blocks, with exact output. Extended warmup does not remove the
+sustained gap to 50 TFLOPS.
+
 ## Record protocol
 
 Use this protocol before promoting a result in the README:

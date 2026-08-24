@@ -1010,6 +1010,11 @@ Wave-private/staging variants were screened as a final architecture check:
 0.087310902); and `bp-persistent-block` reached 35.850 TFLOPS exact. Reducing
 cooperative LDS sharing or occupancy is not competitive with the delta-2 path.
 
+A long-run qualification of the retained delta-2 kernel (1,000 warmups followed
+by five timing blocks of 100 iterations) measured 49.099 TFLOPS with the full
+exactness tuple. It remains below the 50-TFLOPS gate, so extended warmup does
+not erase the sustained kernel gap.
+
 ## Decision
 
 The correct block/K-major p8 kernel with progressive refill, scalar-offset
