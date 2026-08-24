@@ -3846,3 +3846,7 @@ showed an invalid 51.372-TFLOPS timing. A 128-VGPR image with reordered VMEM
 completion and copy-back still failed exactness at 49.575 TFLOPS. The apparent
 50+ result is therefore rejected; the live-range/register contract must be
 redesigned before this producer idea can be revisited.
+
+An explicit VMEM wait before copying the high-register B vector was also
+tested; it remained wrong at 49.274 TFLOPS. The early-B image is closed rather
+than treated as a performance result.

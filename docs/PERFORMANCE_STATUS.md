@@ -966,3 +966,7 @@ invalid and failed exactness (normalized error 1.002724390). Raising the image
 metadata to 128 VGPR and correcting VMEM completion order still failed with
 the same error (49.575 TFLOPS in the copy-back form). The fast timing is not a
 result; this register/live-range producer rewrite is rejected.
+
+Adding an explicit `vmcnt(0)` before the high-register copy did not repair the
+same mismatch (49.274 TFLOPS). The failure is therefore not merely a copy
+ordering hazard; the high-register early-B image is closed.
