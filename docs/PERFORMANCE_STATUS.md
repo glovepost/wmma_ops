@@ -992,6 +992,14 @@ exact at 120 VGPR/two-block occupancy. Five fresh processes measured 48.961,
 below delta-2; the 49.103 short screen was package variation. Clause grouping
 is closed as an independent gain.
 
+### 2026-08-24 A-load width probe
+
+The two adjacent A `buffer_load_b128` instructions were replaced with a single
+`buffer_load_b256` feeding the same eight VGPRs. The gfx1151 assembler rejected
+the vector form (`invalid instruction`, suggesting only scalar
+`s_buffer_load_b256`), so no device image, correctness result, or timing exists.
+The instruction-width fusion is an ISA-level dead end.
+
 ### 2026-08-24 asymmetric LDS padding screen
 
 Complementary A/B stride pairs were tested on the packed 256x128 source

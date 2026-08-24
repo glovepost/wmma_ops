@@ -3863,6 +3863,11 @@ processes measured 48.961, 48.858, 48.840, 48.854, and 48.946 TFLOPS (48.892
 average, 48.840 floor). The isolated 49.103 result was noise; clause grouping
 does not close the gap.
 
+An A-load width fusion using `buffer_load_b256` was attempted, but gfx1151
+rejected the vector instruction at assembly (only scalar `s_buffer_load_b256`
+was suggested). No image or timing exists; this instruction-level path is
+closed by the ISA.
+
 Complementary asymmetric A/B padding pairs (4/12, 12/4, 2/14, 14/2, 6/10,
 10/6) all stayed exact but measured only 25.755--27.389 TFLOPS. The stride
 phases cannot be decoupled without upsetting the WMMA/LDS access pattern, so
