@@ -33,7 +33,7 @@ full numerical check in every process.
 | **49.035 TFLOPS average** | 4096 cubed | block/K16-prepacked FP16 inputs/output | Five fresh 100-iteration processes; distinct persistent-input contract |
 | **46.082 TFLOPS median** | 4096 cubed | FP16 inputs/output | Upstream `bench_half_half`; separate numerical contract |
 | **85.907 INT4 TOPS** | 4096 cubed | prepacked linear W4A4, INT32 output | Exact full-output validation; separate numerical contract |
-| **90.169 INT4 TOPS average** | 4096 cubed | paired-K prepacked linear W4A4, INT32 output | Five interleaved fresh pairs; exact; separate numerical contract |
+| **90.945 INT4 TOPS average** | 4096 cubed | paired-K prepacked linear W4A4, INT32 output | Five interleaved fresh pairs; exact; separate numerical contract |
 | **110.229 INT4 TOPS** | IU4 issue-rate microbenchmark | signed INT4 inputs, INT32 accumulate | ISA qualification only; not an FP16 GEMM result |
 | 21.6 TFLOPS | 4096 cubed | FP16 inputs, FP32 output | Historical PyTorch-extension result |
 | about 41 TFLOPS | 4096 cubed | FP16 inputs/output | Historical `torch.mm` comparison; different contract |
@@ -80,10 +80,11 @@ quantization and quality contract.  See
 [`tools/bench_wmma_iu4_gemm.hip`](tools/bench_wmma_iu4_gemm.hip).
 
 The paired-K experimental variant keeps two K16 slices in four rotating LDS
-slots and publishes the next pair once per two slices. It averages 90.169 INT4
-TOPS across five interleaved fresh pairs (89.381--90.599) with zero mismatches,
-versus 84.960 TOPS for the one-slice control in the same bracket. It is compiled
-with `-DIU4_PAIR_K=1`; the default FP16 and one-slice IU4 paths are unchanged.
+slots and publishes the next pair once per two slices. It averages **90.945 INT4
+TOPS** across five interleaved fresh candidate/control pairs (90.105--92.298
+candidate; 84.484--84.969 one-slice control), with zero mismatches in every
+process. It is compiled with `-DIU4_PAIR_K=1`; the default FP16 and one-slice
+IU4 paths are unchanged.
 
 Read [the performance ledger](docs/PERFORMANCE_STATUS.md) before comparing
 numbers. It contains the exact schedule, distributions, rejected experiments,

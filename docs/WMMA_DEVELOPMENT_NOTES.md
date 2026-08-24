@@ -4098,3 +4098,16 @@ prologue-only splice into delta-2 failed because mode 5 changes the downstream
 pointer/SGPR contract; a source mode-5 register shift was exact but reached
 38.857 TFLOPS at 121 VGPR/three blocks. The traversal needs a full hand
 regeneration, not a prefix transplant.
+
+The exact-grid mapper was also tested in the complementary fixed
+column-major order. It retained the hand schedule and exact output tuple but
+fell to 44.403 TFLOPS in a 5/5 screen, so the row/column traversal is not a
+free scheduling choice. The experiment is closed.
+
+The IU4 branch remains a separate architecture rather than an FP16 shortcut.
+With `-DIU4_PAIR_K=1`, the prepacked linear W4A4 GEMM held 90.945 INT4 TOPS on
+average across five fresh candidate/control pairs (90.105--92.298), all exact
+over the full output. The one-slice controls averaged 84.560 TOPS. The paired
+K16 residency removes one publication/barrier boundary per two slices, but
+ROCMFP4 codebook weights still cannot be sent directly to IU4 without a new
+quantization and scaling contract.

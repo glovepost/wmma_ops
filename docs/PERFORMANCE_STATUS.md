@@ -1306,3 +1306,22 @@ prologue into delta-2 was invalid because the mapping changes the pointer/SGPR
 contract after the mapper. A source-only delta-2 register shift remained exact
 but raised allocation to 121 VGPR/three blocks and reached 38.857 TFLOPS. The
 5x8 traversal is not a drop-in hand-schedule optimization.
+
+### 2026-08-24 fixed column-major traversal and paired-K IU4 qualification
+
+The last low-cost FP16 mapper alternative reversed the exact-grid traversal to
+column-major order while keeping the delta-2 hand schedule, pointer contract,
+and two-block occupancy unchanged. It passed the full 4096-cubed reference
+tuple, but measured **44.403 TFLOPS** (5 warmups/5 iterations). The cache order
+is therefore material to the hand schedule; this variant is closed rather than
+promoted.
+
+The separate `v_wmma_i32_16x16x16_iu4` architecture was then requalified with
+the paired-K prepacked W4A4 GEMM. Five fresh candidate/control pairs used 10
+warmups and 10 timing iterations per process. Every candidate and control had
+zero mismatches over all 16,777,216 INT32 outputs. Candidate medians were
+92.298, 90.195, 91.040, 90.105, and 91.085 INT4 TOPS (average **90.945**);
+the one-slice controls were 83.861, 84.621, 84.484, 84.867, and 84.969 (average
+84.560), a 7.6% paired-K gain. This is a real exact integer-WMMA result, but it
+is not an FP16 TFLOPS result and cannot be substituted for the 49.035 FP16
+leader without changing the activation/weight and scale contract.
