@@ -3885,6 +3885,10 @@ Forcing 64-bit native LDS fragment loads was also exact at unchanged occupancy
 but reached only 41.618 TFLOPS. Narrowing the native load width is closed as a
 performance path.
 
+The streamed-B barrier toggle was also exact but reached only 44.802 TFLOPS
+with three active blocks/24 waves per CU. Additional scheduler barriers are
+counterproductive, so this synchronization path is closed.
+
 Resizing the source `c_n` and packed-path `a_frag` arrays for eight M-fragments
 removed the obvious out-of-bounds state, but the image still produced
 non-finite output behind an invalid 87.047-TFLOPS timing. The remaining

@@ -1033,6 +1033,14 @@ Forcing `WMMA_NATIVE_LOAD_BITS=64` changed each native half fragment load from
 120 VGPR/two-block occupancy but reached only 41.618 TFLOPS. The wider native
 load is not the missing bottleneck; 64-bit LDS loads are closed.
 
+### 2026-08-24 streamed-B barrier screen
+
+Enabling `WMMA_BP_STREAM_B_BARRIER=1` inserted scheduler barriers between B
+fragment groups on the packed 256x128 source path. The output stayed exact, but
+the image reached only 44.802 TFLOPS despite reporting three active blocks/24
+waves per CU. The extra scheduling fences dominate; streamed-B barriers are
+closed.
+
 ### 2026-08-24 asymmetric LDS padding screen
 
 Complementary A/B stride pairs were tested on the packed 256x128 source
