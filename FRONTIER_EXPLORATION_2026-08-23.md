@@ -943,6 +943,13 @@ preserved all waits, loads, barriers, resources, and exact output, but reached
 48.809 TFLOPS. Matrix issue order is therefore not a free throughput gain; the
 original compiler-derived order remains the control.
 
+Additional compiled B-phase and loader variants were screened to close the
+remaining binary backlog. `bp-b-resident` reached 44.600 TFLOPS exact;
+`bp-load-bmiddle` reached 48.672 exact; and `bp-load-astripe` was numerically
+invalid (normalized maximum error 208.326). The `bp-bphase-asm16` and
+`bp-bphase-asm32` objects failed occupancy with invalid device functions
+before timing. None is a candidate for the prepacked leader.
+
 ## Decision
 
 The correct block/K-major p8 kernel with progressive refill, scalar-offset

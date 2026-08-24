@@ -601,6 +601,12 @@ Reversing each contiguous independent WMMA run preserved exactness and the
 120-VGPR resource tuple but reached 48.809 TFLOPS. Matrix issue order is not
 a free gain; the original order remains the control.
 
+The remaining compiled B-phase/load backlog was screened: B-resident reached
+44.600 TFLOPS exact, B-middle ordering 48.672 exact, and A-stripe ordering
+failed correctness with normalized error 208.326. Two B-phase assembly objects
+failed occupancy with invalid device functions before timing. None advances the
+prepacked leader.
+
 ## Record protocol
 
 Use this protocol before promoting a result in the README:
