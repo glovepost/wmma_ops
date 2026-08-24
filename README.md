@@ -2,8 +2,9 @@
 
 Optimized FP16-input, FP32-accumulation WMMA GEMM kernels for AMD Strix Halo
 (`gfx1151`), exposed as a PyTorch extension and accompanied by standalone HIP
-benchmarks. The current validated 4096-cubed standalone peak is **41.322
-TFLOPS**.
+benchmarks. The ordinary-layout, FP32-output contract has a validated
+4096-cubed peak of **41.322 TFLOPS**; a separate persistent block/K16-prepacked
+FP16-output contract now sustains **49.035 TFLOPS**.
 
 The project is a performance laboratory, not a drop-in replacement for
 rocBLAS. Its useful outputs are the gfx1151 fragment helpers, a collection of
@@ -17,12 +18,13 @@ The best fully validated standalone sample is **41.321799 TFLOPS**
 accumulation, and FP32 output. Every one of the 16,777,216 output values was
 checked against a rocBLAS FP32 reference.
 
-That number is a validated peak, not yet a sustained record. Five fresh
-processes produced a 40.900 TFLOPS median and a 40.772-41.104 TFLOPS range;
-only two process medians exceeded the 41 TFLOPS target. Two later clean-build
-audits remained correct but ranged from 40.244 to 40.939 TFLOPS. The current
-work is therefore about raising the performance floor and understanding the
-package-power window, not finding a one-off peak.
+The 41.322 number is a validated ordinary-layout peak, not a sustained record:
+five fresh processes produced a 40.900 TFLOPS median and a 40.772-41.104
+TFLOPS range. The separate prepacked contract is the current sustained
+research leader, but it remains a distinct input-layout contract and is not
+comparable to an ordinary-layout call that includes packing. The open research
+gate is to close its 1.97% gap to 50 TFLOPS with five fresh processes and the
+full numerical check in every process.
 
 | Result | Shape | Numerical contract | Status |
 |---|---|---|---|

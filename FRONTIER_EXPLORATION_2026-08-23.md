@@ -306,6 +306,62 @@ allocation is the fundamental obstacle to producer/consumer specialization,
 but its solution requires new shared-register hardware and ISA support.  It
 does not supply an implementable gfx1151 path.
 
+### Paperclip refresh: AMD scheduling evidence and current compiler work
+
+The later Paperclip pass searched arXiv through 2026-08-23 and retrieved the
+full text of six relevant papers. [HipKittens](https://arxiv.org/abs/2511.08083)
+reports two AMD-friendly schedules: eight-wave ping-pong and four-wave
+fine-grained interleave. Its key portability warning is that AMD statically
+allocates registers to every wave, so NVIDIA-style dedicated producer waves
+can consume registers without contributing output. That matches our measured
+producer/consumer regressions and keeps the all-wave p8 kernel as the correct
+base. HipKittens also uses `s_setprio` around matrix clusters; our earlier
+gfx1151 screen reached only 42.439 versus 47.937 TFLOPS and closes that hint.
+
+[Twill](https://arxiv.org/abs/2512.18134) formulates software pipelining and
+warp specialization as a resource-constrained schedule search, while
+[Tawa](https://arxiv.org/abs/2510.14719) expresses producer/consumer channels
+as asynchronous references. Their mbarrier/TMA/WGMMA mechanisms are NVIDIA
+features absent from gfx1151, but the transferable rule is useful: model the
+whole dependency graph and live-resource footprint, not an isolated load
+latency. [FIBER](https://arxiv.org/abs/2608.19628) proposes new shared-register
+hardware and is therefore a hardware research direction rather than a current
+kernel implementation.
+
+[Bringing Auto-tuning to HIP](https://arxiv.org/abs/2407.11488) reports that
+AMD tuning spaces can have much sharper optima than NVIDIA spaces. That is the
+reason for the new exact row-order search rather than trusting one promising
+sample. [tritonBLAS](https://arxiv.org/abs/2512.04226) supplies a useful
+hierarchical tile/cache model, but the 4096 square already launches 2048
+workgroups; Stream-K-style tail balancing is not expected to close this
+compute-kernel gap.
+
+### WMMA row-order screen
+
+The delta-2 leader's first four WMMA issues are constrained by progressive
+`lgkmcnt(4/2/0)` readiness. The later three four-row fragments are fully ready,
+so `tools/reorder_hot_wmma_rows_asm.py` permutes only their independent issue
+order. Row 0 remains first in the final fragment because the next global refill
+overwrites its A registers. The transform preserves instruction count,
+dependencies, LDS layout, and resources; every candidate passed the full
+rocBLAS tuple at 120 VGPR, 22 SGPR, 18 KiB LDS, and zero spills.
+
+The first screen ran in a lower package state and is explicitly provisional:
+
+| Row order | TFLOPS |
+|---|---:|
+| Controls | 44.954 / 44.808 |
+| 0132 | 44.853 |
+| 0213 | 45.231 |
+| 0231 | 44.855 |
+| 0312 | **45.348** |
+| 0321 | 45.274 |
+
+0312 is +1.04% over that control midpoint, but its absolute value cannot be
+compared with the 49.035 qualification. The isolated group screen is prepared
+by `build-wmma-row-order-isolation.sh`; re-bracket it only after the Ember
+release and under the shared lock.
+
 ### Late one-barrier and geometry sweep
 
 The remaining one-barrier layouts were implemented and screened against a

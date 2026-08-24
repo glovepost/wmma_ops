@@ -11,6 +11,9 @@ and a long historical notebook. They do not carry equal authority.
    numerical contracts, source audit, rejected paths, and promotion gate.
 3. [Profiling guide](PROFILING.md) — how to separate timing, counters, and ISA
    analysis on gfx1151.
+4. [Frontier exploration](../FRONTIER_EXPLORATION_2026-08-23.md) — dated
+   frontier experiments, Paperclip research, and the current route to 50
+   TFLOPS.
 
 ## Architecture references
 

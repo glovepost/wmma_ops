@@ -1,21 +1,22 @@
 # gfx1151 WMMA performance status
 
 This is the current performance ledger and optimization plan for the repository.
-It was refreshed on 2026-08-23 from source base `8f7d926` plus the standalone
-record harness added with this documentation update. In-progress extension
-kernel changes in the shared worktree were deliberately not included. The older
-development notes remain useful as a lab notebook, but their claims are not
-automatically current.
+It was refreshed on 2026-08-23 with the ordinary-layout standalone harness,
+the block/K16-prepacked research harness, the Paperclip literature pass, and
+the current assembly-search tooling. In-progress extension-kernel changes in
+the shared worktree were deliberately not included. The older development
+notes remain useful as a lab notebook, but their claims are not automatically
+current.
 
 ## What the repository has actually measured
 
-The current validated peak is **41.322 TFLOPS** (3.326 ms) for a
-4096 x 4096 x 4096 GEMM with FP16 inputs and FP32 accumulation/output. It uses
-the pinned standalone harness in `tools/`, deterministic random inputs, and a
-full rocBLAS FP32 reference over all 16,777,216 outputs. It exceeds the
-historical 41 TFLOPS target, but it has not passed the stricter sustained
-promotion gate: five fresh 100-iteration processes had a 40.900 TFLOPS median,
-a 40.772-41.104 range, and two passes above 41.
+The ordinary-layout contract has a validated peak of **41.322 TFLOPS** (3.326
+ms) for a 4096 x 4096 x 4096 GEMM with FP16 inputs and FP32 accumulation/output.
+It uses the pinned standalone harness in `tools/`, deterministic random inputs,
+and a full rocBLAS FP32 reference over all 16,777,216 outputs. Its five-process
+ordinary-layout audit had a 40.900 TFLOPS median and a 40.772-41.104 range. The
+separate block/K16-prepacked FP16-output contract is the current sustained
+research leader at 49.035 TFLOPS; it has its own 50-TFLOPS promotion gate.
 
 The previous documented record was **21.6 TFLOPS**. It came from the historical
 ROCm 7.9/7.10-preview environment and used three warm-ups and 20 timed
@@ -271,6 +272,20 @@ contract: packing is outside the timed region. The previous sustained leader
 was 48.614 TFLOPS. A 49.573-TFLOPS short sample and two isolated 50+ samples
 remain non-promotable; the sustained 50-TFLOPS FP16 gate is still open.
 
+A Paperclip-guided WMMA issue-order screen then permuted only the three
+fully-ready four-row fragments in the delta-2 hot loop. The progressive first
+fragment was left untouched, and row 0 remained first in the final fragment
+because the following global refill overwrites its A registers. Every form
+assembled at 120 VGPR, 22 SGPR, 18 KiB LDS, zero spills, and reproduced the
+full reference tuple. In a low-package-state exploratory bracket, controls
+reached 44.954/44.808 TFLOPS; row orders 0132/0213/0231/0312/0321 reached
+44.853/45.231/44.855/45.348/45.274. The 0312 signal is +1.04% over that
+bracket's control midpoint, but these absolute values are not comparable to
+the 49.035 qualification and the run was interrupted for an Ember release.
+The isolated group-1/group-2/group-3 follow-up is prepared in
+`build-wmma-row-order-isolation.sh` and remains unqualified until the shared
+GPU is available.
+
 The latest occupancy-preserving barrier experiments did not close that gap.
 A hand-scheduled compact interleaved ping-pong kernel retained 118 VGPR, two
 blocks/16 waves, 30 KiB LDS, and one barrier per K16, but reached only 46.024
@@ -444,14 +459,15 @@ stores into transposed LDS, and uses the same scalar direct-to-global epilogue
 as the standard kernel. "Zero-copy" and "swizzled B" are historical names, not
 descriptions of the current data path.
 
-## Current plan to sustain more than 41 TFLOPS
+## Current plan to sustain more than 50 TFLOPS
 
-The peak target has been crossed. The remaining work is to make that crossing
-durable and integrate the schedule without weakening the numerical contract.
+The ordinary-layout peak has been crossed and the prepacked contract is within
+1.97% of the target. The remaining work is to make a 50-TFLOPS crossing durable
+without weakening either numerical contract.
 
-1. **Reduce the fresh-process floor by at least 0.56%.** The current minimum is
-   40.772 TFLOPS. Optimize against the worst and median process, not the best
-   short block.
+1. **Close the prepacked sustained gap.** The current five-process floor is
+   48.980 TFLOPS and the average is 49.035; optimize against the worst and
+   median fresh process, not the best short block.
 2. **Attack the measured synchronization cost.** The one-buffer K32 path uses
    two workgroup barriers per step. Explore a split signal/wait schedule or a
    shared-memory layout that permits overlap while preserving the current
@@ -464,8 +480,9 @@ durable and integrate the schedule without weakening the numerical contract.
 4. **Port the exact schedule into the PyTorch extension.** Preserve the pinned
    standalone harness as the baseline, then compare the integrated kernel with
    identical preallocated output and inputs before measuring API overhead.
-5. **Promote only after five fresh processes.** The full FP32 reference must
-   pass in every process and every process median must exceed 41 TFLOPS.
+5. **Promote only after five fresh processes.** The full reference must pass in
+   every process and every process median must exceed 50.0 TFLOPS for the
+   prepacked contract. Keep the ordinary-layout contract's separate gate.
 
 ## Low-priority paths for the square record shape
 
@@ -512,8 +529,9 @@ Use this protocol before promoting a result in the README:
    in the commit or release artifact.
 7. Promote a new record only when the improvement is larger than normal
    run-to-run noise. The historical 21.6 TFLOPS record would require more than
-   22.03 TFLOPS under a 2% noise margin, but the active project gate is stricter:
-   every one of the five fresh-process medians must exceed 41.0 TFLOPS.
+   22.03 TFLOPS under a 2% noise margin. The ordinary-layout gate remains five
+   fresh-process medians above 41.0 TFLOPS; the prepacked research gate is five
+   fresh-process medians above 50.0 TFLOPS.
 
 Current ROCm documentation lists gfx1151 as supported by ROCm Compute Profiler.
 Counter availability still depends on the installed driver and profiler, so
