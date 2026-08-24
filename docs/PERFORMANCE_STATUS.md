@@ -422,6 +422,17 @@ signals reversed in the composition bracket: 49.863/49.827 controls bracketed
 Retain the ordinary delta-2 allocation; the pair permutations are noise at
 this measurement resolution.
 
+An issue-order screen then permuted the ten independent initial `ds_load_b128`
+operations in the delta-2 hot loop while leaving every destination, address,
+WMMA order, and wait threshold unchanged. B-first and B-middle remained exact
+but reached only 49.152 and 49.072 TFLOPS in a five-block short bracket versus
+49.252 for the same-pass control. An alternating A-stripe order failed the full
+reference (normalized error 239.96), showing that the existing LGKM wait
+thresholds encode a real completion-order dependency even when the source
+addresses are independent. Close issue-order permutations as a negative result;
+the retained schedule remains the compiler order plus the delta-2 register
+phase.
+
 At 256 GB/s, the corresponding compute-to-memory ridge point is about
 232 FLOP/byte (`59.4e12 / 256e9`), not 106 FLOP/byte. Both inputs should be
 replaced by observed clocks and sustained bandwidth when making a measured
