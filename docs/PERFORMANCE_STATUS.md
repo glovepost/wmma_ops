@@ -556,6 +556,20 @@ Do not repeat these unchanged without new evidence:
 FP16 accumulation may have a different speed/accuracy trade-off, but it is a
 different benchmark class and must not replace an FP32-accumulation record.
 
+## Latest frontier closure (2026-08-24)
+
+The counter-guided follow-up kept the delta-2 hand-scheduled kernel as the
+control: separate rocprofiler passes showed high active occupancy with waits
+dominated by barriers, counters, and LDS retirement rather than DRAM transfer.
+Removing the publish barrier produced a large numerical mismatch, while
+streaming A fragments and changing WMMA issue order exceeded the register
+budget (135 and 142 VGPR respectively). A persistent tile scheduler reached
+35.821 TFLOPS despite exact output. Finally, moving the B refill before the A
+refills preserved exactness and resources but measured 48.846/48.889/48.798/
+48.690/48.784 TFLOPS across five fresh processes (48.801 average, 48.690
+floor), so it is rejected. No unvalidated or isolated 50+ sample is promoted;
+the delta-2 leader remains 49.035 TFLOPS average with a 48.980 floor.
+
 ## Record protocol
 
 Use this protocol before promoting a result in the README:
