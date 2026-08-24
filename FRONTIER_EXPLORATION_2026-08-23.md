@@ -981,6 +981,11 @@ and 32.366 TFLOPS respectively. All were exact under the K32-slice-prepacked
 contract. The ring's extra LDS traffic and handoff work dominate, so a K64
 design cannot be justified by simply extending this implementation.
 
+Global-load cache-policy variants were screened last: A-side DLC/GLC/SLC
+reached 47.155/47.129/46.995 TFLOPS; B-side DLC/GLC/SLC reached
+46.362/47.351/46.961; and both-SLC reached 46.560. All outputs were exact,
+but every cache hint regressed from the ordinary refill policy.
+
 ## Decision
 
 The correct block/K-major p8 kernel with progressive refill, scalar-offset

@@ -631,6 +631,10 @@ W8, and fenced forms, despite exact output. Their extra LDS traffic and
 handoff work dominate, so extending the ring to K64 is not a promising direct
 path.
 
+Global-load cache-policy variants reached 46.362–47.351 TFLOPS for A/B
+DLC/GLC/SLC combinations, with both-SLC at 46.560. All were exact, but cache
+hints regress from the ordinary prepacked refill policy.
+
 ## Record protocol
 
 Use this protocol before promoting a result in the README:
