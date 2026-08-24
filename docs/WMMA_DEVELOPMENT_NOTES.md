@@ -26,6 +26,12 @@ a noise-sized change. The temporary include override and binaries were deleted;
 no patch was promoted. Descriptor-correct MUBUF alone does not remove the refill
 bottleneck, so a future attempt must change the producer/consumer schedule.
 
+The `warp_tile_m=2` fragment partition was rechecked with matching 128x128
+launcher and kernel dimensions. Its original half-wave B loader was repaired
+to cover the full tile, but the aligned candidate still hit an unspecified
+launch failure before validation. This confirms a deeper fragment/loader
+contract issue; no timing is recorded and no patch is retained.
+
 # Code organization plan for `wmma_gemm.hip`
 
 This document outlines logical chunks of code that can be extracted into separate header files to improve maintainability and organization.

@@ -758,6 +758,15 @@ Counter availability still depends on the installed driver and profiler, so
 query the target host and document unavailable counters instead of assuming
 that all counters work or that none do.
 
+### 2026-08-24 warp-tile-2 contract closure
+
+The `warp_tile_m=2` fragment-partition screen was revisited at source level.
+The first attempt had a launcher/header tile-size mismatch; after aligning both
+to 128x128 and repairing the half-wave B-vector mapping, the kernel still
+terminated with an unspecified launch failure before the exactness gate. It
+has no valid timing result and remains closed until the fragment loader is
+redesigned rather than patched in place.
+
 ### 2026-08-24 source-level raw-buffer prefetch screen
 
 The transposed refill path was regenerated from source with raw-buffer loads
