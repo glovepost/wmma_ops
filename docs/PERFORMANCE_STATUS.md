@@ -576,6 +576,13 @@ exact but under the original-layout contract. A manual `s_setprio` cluster
 hint preserved the delta-2 resource tuple but fell to 42.595 TFLOPS. An
 `A0,B,A1` refill interleave reached 48.816 TFLOPS and was also rejected.
 
+A critical-path LDS issue-order variant moved the first B fragment ahead of
+the A fragments. It remained exact with the same 120-VGPR resource tuple, but
+five paired candidate/control processes measured 49.076 versus 49.162 TFLOPS
+on average (candidate floor 48.982 versus control floor 49.052). The initial
+48.985-TFLOPS screen was package-state noise, so the original LDS order stays
+the control.
+
 ## Record protocol
 
 Use this protocol before promoting a result in the README:

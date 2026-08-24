@@ -913,6 +913,15 @@ also preserved 120 VGPR and exactness but fell to 42.595 TFLOPS. Finally,
 interleaving the refill as `A0,B,A1` reached 48.816 TFLOPS, exact but below
 the delta-2 leader. These close the remaining compiled schedule variants.
 
+A new LDS issue-order experiment then issued the first B fragment before the
+A fragments, because that B operand feeds the first WMMA cluster. It preserved
+120 VGPR, 22 SGPR, 18 KiB LDS, and exact output. In a five-process paired
+screen it measured 49.276, 49.094, 49.010, 49.019, and 48.982 TFLOPS (49.076
+average, 48.982 floor), versus fresh delta-2 controls at 49.223, 49.211,
+49.201, 49.124, and 49.052 (49.162 average, 49.052 floor). The reordered
+critical path therefore loses 0.086 TFLOPS and is rejected; the apparent
+single-screen 48.985 result was package-state noise.
+
 ## Decision
 
 The correct block/K-major p8 kernel with progressive refill, scalar-offset
