@@ -4005,6 +4005,13 @@ assembled, gfx1151 rejected it as `invalid device function` before occupancy
 and validation. The explicit loop compare is retained as a required code-object
 boundary; no throughput result is recorded.
 
+The hand epilogue address path was then changed to a 64-bit recurrence for the
+first eight constant-stride stores, using two otherwise-unused VGPRs and a
+carry-aware VOP3 increment. Both syntactic carry-in orderings assembled but
+were rejected by gfx1151 as `invalid device function` before occupancy. The
+original per-store address reconstruction remains required; no performance
+result is recorded.
+
 The complementary one-sided B producer was then built with
 `WMMA_BP_HYBRID_B_PINGPONG=1`, leaving A in the active buffer. It stayed exact
 at two blocks/16 waves, but five medians were 45.090, 45.107, 44.805, 44.976,

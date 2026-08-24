@@ -1090,6 +1090,15 @@ rejected it as `invalid device function` during the occupancy query. No
 correctness or timing result exists; the explicit compare remains required by
 the loader/code-object contract.
 
+### 2026-08-24 epilogue address recurrence
+
+The first eight scalar C stores were rewritten to carry a 64-bit output
+pointer in two otherwise-unused VGPRs and advance it by the constant `4*N`
+byte stride. Two VOP3 carry-in operand orderings were assembled, but both
+images were rejected by the gfx1151 runtime as `invalid device function` at
+the occupancy query. No timing or correctness result exists; the existing
+per-store address reconstruction remains the supported hand-assembly form.
+
 ### 2026-08-24 hybrid-B ping-pong screen
 
 The complementary one-sided producer was built with B ping-pong and A left in
