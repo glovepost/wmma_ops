@@ -1011,6 +1011,18 @@ average, 47.335 floor). The existing wait-before-barrier ordering remains
 strictly better; split signaling is an ISA dead end and wait-after-barrier is
 closed as a regression.
 
+### 2026-08-24 hybrid-A grouped producer screen
+
+The hybrid A ping-pong branch was rebuilt with grouped A loads and a late A
+commit (`WMMA_BP_HYBRID_A_PINGPONG=1`, `WMMA_BP_HYBRID_A_GROUP_LOADS=1`,
+`WMMA_BP_HYBRID_A_LATE_COMMIT=1`). This keeps B single-buffered while A is
+written to an inactive LDS buffer, providing a distinct producer/consumer
+schedule without the full two-operand double-buffer footprint. All five
+launches passed the exact tuple, but medians were **44.551, 44.539, 44.333,
+44.391, and 44.246 TFLOPS** (44.412 average, 44.246 floor). The extra A
+handoff work outweighs the overlap; this hybrid schedule is closed for the
+square record shape.
+
 The companion `WMMA_BP_HALF_SWIZZLE=1` layout was also screened on the same
 256x128 packed shape. It passed the complete exactness tuple at unchanged
 two-block occupancy, but reached only 38.402 TFLOPS. Half-word LDS swizzling is

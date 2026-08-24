@@ -3951,3 +3951,10 @@ placed the VMEM wait after the workgroup barrier; it was loadable and exact, but
 five medians were 47.746, 47.619, 47.633, 47.385, and 47.335 TFLOPS (47.543
 average, 47.335 floor). The original wait-before-barrier schedule remains the
 control.
+
+The hybrid A producer was then screened with grouped A loads and a late commit
+to the inactive LDS buffer. The exact 256x128 packed image retained two
+blocks/16 waves, but five medians measured 44.551, 44.539, 44.333, 44.391, and
+44.246 TFLOPS (44.412 average, 44.246 floor). This distinct one-sided
+producer/consumer schedule is numerically sound but below the retained leader;
+its extra A handoff work closes the hybrid-A route for the square shape.
