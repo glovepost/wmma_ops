@@ -843,3 +843,11 @@ refill stores/loads. The +8-byte phase remained exact but collapsed to 35.843
 TFLOPS; the +16-byte phase remained exact with medians 48.958, 49.145, 48.962,
 48.928, and 48.989 TFLOPS (about 48.997 average). A-bank phase is load-bearing
 but offers no sustained gain; the B/A phase-composition branch is closed.
+
+### 2026-08-24 combined A/B LDS phase
+
+Shifting both A and B LDS accesses by +16 bytes preserved the exact output and
+the 120-VGPR/two-block resource tuple. Its five fresh-process medians were
+48.649, 48.686, 48.775, 48.822, and 48.698 TFLOPS (about 48.726 average),
+below the control band. The operands’ bank phases do not combine into a gain;
+the phase-composition branch is closed.

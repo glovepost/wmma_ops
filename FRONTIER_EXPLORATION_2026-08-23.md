@@ -1142,6 +1142,10 @@ Both candidates were exact; +8 reached 35.843 TFLOPS and +16 reached
 48.958/49.145/48.962/48.928/48.989 (about 48.997 average). The A bank phase
 is load-bearing but not a sustained improvement, so this branch is closed.
 
+The combined A+16/B+16 LDS phase was exact but measured
+48.649/48.686/48.775/48.822/48.698 TFLOPS (about 48.726 average). It is below
+the control band, so operand phase composition is closed.
+
 The complementary 256x192 tile was rejected before timing because the fixed
 4096-wide problem is not divisible by 192. Its edge workgroup faulted on the
 packed/output bounds, so it supplies no kernel performance result.

@@ -3763,6 +3763,11 @@ refill access. Both forms were exact. +8 fell to 35.843 TFLOPS; +16 averaged
 about 48.997 TFLOPS across five processes. The bank phase is load-bearing but
 not a standalone source of headroom, so the A-LDS phase branch is closed.
 
+Combining the operand phases was also tested: every A and B LDS access moved by
+16 bytes. The candidate stayed exact with unchanged occupancy, but five
+processes averaged about 48.726 TFLOPS (48.649--48.822). A/B phase interaction
+does not provide headroom, so the combined phase is not retained.
+
 The complementary 256x192 tile was not a valid benchmark geometry: 192 does
 not divide 4096, and its edge workgroup faulted before validation. No timing is
 recorded; non-divisible tiles require a separate bounds-safe harness.
