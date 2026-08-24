@@ -622,6 +622,10 @@ Paired-fragment/read2 variants were screened too: B-pair forms reached
 43.753–43.809 TFLOPS. All valid output was exact, but none improved the
 delta-2 control.
 
+Indexed/static double-buffer forms reached 22.358–40.765 TFLOPS across their
+padding variants, all exact. The extra LDS residency and index arithmetic lose
+the leader's two-block occupancy, so this family is closed.
+
 ## Record protocol
 
 Use this protocol before promoting a result in the README:

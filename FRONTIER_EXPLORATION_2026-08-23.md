@@ -969,6 +969,12 @@ and `bp-bpair-no-vmwait` measured 47.642, 47.576, and 47.593 TFLOPS; the
 reached 43.809/43.753 TFLOPS. All valid outputs were exact, but the operand
 pairing/read-width changes regress from the delta-2 control.
 
+The indexed/static double-buffer family was also screened. Indexed p0/p4/p8
+forms reached 40.765/24.956/30.336 TFLOPS; static p0/p4/p8 forms reached
+38.121/22.358/32.183; and the late-static p8 form reached 39.415 TFLOPS.
+Every result was exact, but the extra LDS residency and index arithmetic lose
+the two-block occupancy of the delta-2 control.
+
 ## Decision
 
 The correct block/K-major p8 kernel with progressive refill, scalar-offset
