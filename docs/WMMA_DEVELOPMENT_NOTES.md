@@ -3674,3 +3674,12 @@ threshold only under the separate integer contract; it does not alter the
 49.035-TFLOPS FP16 leader. The four-slot/pair-boundary schedule is nevertheless
 a useful architecture to revisit with a smaller FP16 tile or a different
 producer/consumer partition.
+
+The corresponding FP16 transfer screen found a hard resource/layout boundary.
+The supported 128x128 four-wave block-prepacked mapping compiled at 153 VGPR
+and 12 KiB LDS, passed the exact output check, and measured 40.661 TFLOPS. A
+forced eight-wave mapping faulted before validation because the existing WMMA
+fragment contract is not valid for that geometry. A four-slot paired-K design
+at 256x128 would consume approximately 48 KiB LDS per block, eliminating the
+two-block occupancy of the 49-TFLOPS delta-2 kernel. More LDS buffering alone is
+therefore not the route to 50 FP16 TFLOPS; a new fragment partition is required.

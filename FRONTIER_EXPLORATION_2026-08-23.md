@@ -1048,6 +1048,16 @@ the delta-2 control. A B-first late-load ordering was also exact but reached
 48.525 TFLOPS in the initial screen. Both global-load orderings are closed as
 regressions.
 
+The paired-K transfer screen measured the smallest supported FP16
+block-prepacked geometry. A 128x128, four-wave tile with the native fragment
+mapping compiled at 153 VGPR and 12 KiB LDS, passed the exact full-output tuple,
+and reached 40.661 TFLOPS in a 100-warmup/100-iteration screen. A forced
+eight-wave 128x128 mapping faulted before validation because it violates the
+kernel's fragment/layout contract. Four-slot paired-K residency at 256x128
+would consume about 48 KiB LDS per block and remove the two-block occupancy of
+the delta-2 leader. The IU4 paired-K schedule is thus not a direct FP16 port;
+the next candidate needs a different fragment partition.
+
 ## Decision
 
 The correct block/K-major p8 kernel with progressive refill, scalar-offset
