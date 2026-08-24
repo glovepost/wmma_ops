@@ -612,6 +612,11 @@ from 47.308 to 47.649 TFLOPS, while the lower-occupancy `bp-prefetch-*` forms
 reached 37.032–38.031 TFLOPS with three resident blocks. All valid outputs
 were exact; none advances the delta-2 control.
 
+VMEM clause/grouping variants were screened as well: `bp-clause2-break1`,
+`bp-clause3`, `bp-no-clause`, `bp-no-explicit-vmwait`, and `bp-no-vmwait`
+measured 47.723–47.445 TFLOPS, all exact at the same 120-VGPR occupancy.
+Every form regressed from the delta-2 schedule.
+
 ## Record protocol
 
 Use this protocol before promoting a result in the README:

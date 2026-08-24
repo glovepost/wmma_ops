@@ -957,6 +957,12 @@ The prefetch-permutation backlog was also screened. `bp-pf-013`, `021`,
 TFLOPS exact with three resident blocks. These permutations are closed and do
 not advance the delta-2 control.
 
+VMEM clause/grouping variants were then screened: `bp-clause2-break1`,
+`bp-clause3`, `bp-no-clause`, `bp-no-explicit-vmwait`, and `bp-no-vmwait`
+measured 47.723, 47.662, 47.589, 47.501, and 47.445 TFLOPS respectively.
+All were exact at the same 120-VGPR occupancy, but every form regressed from
+the delta-2 schedule.
+
 ## Decision
 
 The correct block/K-major p8 kernel with progressive refill, scalar-offset
