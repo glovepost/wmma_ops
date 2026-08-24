@@ -3570,3 +3570,41 @@ Every boundary candidate remained exact at 120 VGPR and 16 reported waves.
 None improves v65, establishing that the winning group includes v65 itself and
 all later address/fragment/refill registers. The near-neutral v66 result
 isolates physical v65 placement as a small but measurable part of the gain.
+
+### 2026-08-23: Fine-grained register permutations close as noise
+
+The boundary result left a narrower question: can the 120-VGPR delta-2 kernel
+improve further by changing only the assignment of equally sized live groups?
+Two exact-involution assembly transforms answered it without changing the
+instruction stream, live count, dependencies, or resource metadata.
+
+The first transform swapped B's eight-register hot-loop bank with each A bank.
+The second swapped epilogue-safe 16-register accumulator pairs. Accumulator
+pairs involving v1 were rejected statically because the epilogue consumes the
+contiguous `v[0:1]` range. Every built candidate used 120 VGPR, 22 SGPR,
+18 KiB LDS, zero spills, and reproduced the full rocBLAS tuple.
+
+| First bracket | TFLOPS |
+|---|---:|
+| Controls | 49.580 / 49.622 |
+| B/A0 | 49.767 |
+| B/A1 | 49.532 |
+| B/A2 | 49.631 |
+| B/A3 | 49.729 |
+| Accumulators v17/v33 | 49.602 |
+| Accumulators v17/v49 | 49.785 |
+| Accumulators v33/v49 | 49.514 |
+
+The apparent B/A0 and v17/v49 positives were then composed and re-bracketed:
+
+| Composition bracket | TFLOPS |
+|---|---:|
+| Controls | 49.863 / 49.827 |
+| B/A0 | 49.598 |
+| Accumulators v17/v49 | 49.567 |
+| B/A0 + accumulators v17/v49 | 49.552 / 49.886 |
+| B/A3 + accumulators v17/v49 | 49.758 |
+
+The signs reversed and the best combined average stayed below the control
+midpoint. Close these same-width group swaps as run-order/package noise. Keep
+the unpermuted delta-2 allocation as the research base.

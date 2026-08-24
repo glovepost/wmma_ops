@@ -383,6 +383,14 @@ improve it. In a lower package state, opening/closing v65 controls reached
 only as a same-pass relative screen: v66 was closest at -0.56%, while all other
 cuts lost 1.2--2.2%. The promoted phase group starts at v65.
 
+Finer fixed-resource placement did not add another gain. Exchanging the hot B
+bank with each A bank and exchanging epilogue-safe accumulator pairs at
+v17/v33/v49 all remained exact at 120 VGPR. Initial 49.767/49.785-TFLOPS
+signals reversed in the composition bracket: 49.863/49.827 controls bracketed
+49.598 for B/A0, 49.567 for v17/v49, and 49.552/49.886 for their combination.
+Retain the ordinary delta-2 allocation; the pair permutations are noise at
+this measurement resolution.
+
 At 256 GB/s, the corresponding compute-to-memory ridge point is about
 232 FLOP/byte (`59.4e12 / 256e9`), not 106 FLOP/byte. Both inputs should be
 replaced by observed clocks and sustained bandwidth when making a measured

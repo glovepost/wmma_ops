@@ -748,6 +748,22 @@ order. All were exact. V66 came closest but remained 0.56% below the control
 midpoint; every other cut lost 1.2--2.2%. The winning transformation therefore
 includes v65 and all later address/fragment registers as one phase group.
 
+Two finer placement sweeps then held the delta-2 dataflow and 120-VGPR count
+fixed. The hot-loop sweep exchanged B's eight-register bank with each of the
+four A banks. The epilogue-safe accumulator sweep exchanged 16-register pairs
+at v17, v33, and v49; pairs involving v1 were rejected because the epilogue
+requires contiguous `v[0:1]`. Every assembled permutation was an exact
+involution and reproduced the full rocBLAS tuple.
+
+The first bracket suggested small positives: B/A0 reached 49.767 TFLOPS and
+the v17/v49 accumulator exchange reached 49.785, against 49.580/49.622
+controls. A composition bracket reversed those signs. Its controls reached
+49.863/49.827 TFLOPS, while B/A0 reached 49.598, v17/v49 reached 49.567,
+B/A0 plus v17/v49 reached 49.552/49.886, and B/A3 plus v17/v49 reached 49.758.
+The best combined average remained below the control midpoint. These are
+order/noise effects rather than additive gains; the unpermuted delta-2 form
+remains the leader.
+
 ## Decision
 
 The correct block/K-major p8 kernel with progressive refill, scalar-offset
