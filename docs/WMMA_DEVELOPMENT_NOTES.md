@@ -3877,6 +3877,10 @@ non-finite output behind an invalid 86.892-TFLOPS timing; four N-waves repaired
 exactness but reached only 47.590 TFLOPS. The larger M stripe is not a viable
 route to 50 TFLOPS.
 
+The source paired-B staging path was also screened on 256x128. It remained
+exact at unchanged occupancy but reached only 47.698 TFLOPS, so B pairing is
+closed as a standalone optimization.
+
 Resizing the source `c_n` and packed-path `a_frag` arrays for eight M-fragments
 removed the obvious out-of-bounds state, but the image still produced
 non-finite output behind an invalid 87.047-TFLOPS timing. The remaining

@@ -1021,6 +1021,11 @@ The repaired image still returned non-finite output behind an invalid 87.047
 TFLOPS timing at three-block/12-wave occupancy. The failure is deeper than
 array sizing (fragment/epilogue assumptions), so large-M ownership is closed.
 
+The source paired-B path (`WMMA_BP_B_PAIR=1`) was screened on the retained
+256x128 packed geometry. It stayed exact at 120 VGPR/two-block occupancy but
+reached only 47.698 TFLOPS in the 20-warmup/50-iteration screen. Pairing B
+loads/consumers is below delta-2 and is closed for this shape.
+
 ### 2026-08-24 asymmetric LDS padding screen
 
 Complementary A/B stride pairs were tested on the packed 256x128 source
