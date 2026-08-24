@@ -1155,6 +1155,10 @@ loads, refill stores, and WMMA operands. The exact 120-VGPR candidate averaged
 about 48.855 TFLOPS across five processes, so A operand-bank placement alone is
 closed.
 
+The complementary A2/A3 permutation was exact at unchanged resources but
+averaged about 48.752 TFLOPS across five processes. Both A-fragment register
+pairings are closed as standalone optimizations.
+
 The complementary 256x192 tile was rejected before timing because the fixed
 4096-wide problem is not divisible by 192. Its edge workgroup faulted on the
 packed/output bounds, so it supplies no kernel performance result.

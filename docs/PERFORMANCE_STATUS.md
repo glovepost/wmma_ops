@@ -867,3 +867,7 @@ stores, and WMMA operands, changing physical operand-bank placement without
 changing dataflow or resources. The corrected candidate passed exactness at
 120 VGPR/two blocks, but five medians averaged about 48.855 TFLOPS. A-fragment
 register placement alone is closed.
+
+The complementary A2/A3 register-group permutation was also exact at unchanged
+resources, but five medians averaged about 48.752 TFLOPS. Together with the
+A0/A1 result, this closes A-fragment register permutation as a standalone path.
