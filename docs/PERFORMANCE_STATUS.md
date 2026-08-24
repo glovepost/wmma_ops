@@ -489,7 +489,7 @@ same 128 x 64 geometry. The `WIDE_128x128` enum exists, but
 `select_optimal_tile()` currently has no path that returns it. The adaptive
 selector therefore does not test a wide tile at the record shape.
 
-### Unmeasured large-tile candidate
+### Large-tile candidate (measured and rejected)
 
 `matmul_opt` is bound in Python but is absent from the benchmark lists. Its
 actual kernel is a 128 x 128 work-group tile with eight waves and a 2 x 4 WMMA
@@ -497,11 +497,13 @@ tile per wave (eight FP32 accumulators). The binding text and wrapper comments
 that describe a 256 x 128 tile, 4 x 4 warp tiling, or a vectorized epilogue are
 stale.
 
-This is the best first experiment because it doubles useful output work per
-barrier and halves staged A traffic per output element relative to the record
-kernel. It also carries substantial risk: eight accumulator fragments consume
-64 VGPRs per lane before A/B fragments, transpose temporaries, addresses, and
-loop state are counted. A spill or occupancy collapse can erase the reuse gain.
+This was measured as a first experiment. At 4096 cubed it ran 20.52--20.64
+TFLOPS, and its full-output check failed badly (`normalized_max_error=1.268672511`,
+cosine `0.124986872`). Passing B transposed did not repair the contract: it ran
+8.00 TFLOPS with normalized error 1.286538805 and cosine 0.125113875. The
+candidate is therefore both numerically invalid and far below the prepacked
+leader; the stale binding description should not be used to motivate another
+screen without first replacing its fragment/load/epilogue contract.
 
 ### Historical names
 
