@@ -570,6 +570,12 @@ refills preserved exactness and resources but measured 48.846/48.889/48.798/
 floor), so it is rejected. No unvalidated or isolated 50+ sample is promoted;
 the delta-2 leader remains 49.035 TFLOPS average with a 48.980 floor.
 
+The remaining compiled N-packed/N-major family was subsequently screened:
+base 42.522, M-major 39.857, 2x4-warp 40.919, and K32 38.695 TFLOPS, all
+exact but under the original-layout contract. A manual `s_setprio` cluster
+hint preserved the delta-2 resource tuple but fell to 42.595 TFLOPS. An
+`A0,B,A1` refill interleave reached 48.816 TFLOPS and was also rejected.
+
 ## Record protocol
 
 Use this protocol before promoting a result in the README:

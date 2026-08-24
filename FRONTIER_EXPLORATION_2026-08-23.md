@@ -903,6 +903,16 @@ and the complete reference error tuple. Five fresh processes measured
 positive single-pass signal was scheduling/power noise, not a transferable
 gain; the original refill order remains the comparison baseline.
 
+The previously compiled N-packed/N-major family was finally screened on the
+GPU rather than left as a static-code hypothesis. The base, M-major,
+2x4-warp/128x256, and K32 forms measured 42.522, 39.857, 40.919, and 38.695
+TFLOPS respectively under the original-layout contract; all were exact, but
+none transferred to the retained prepacked path. A hand-injected `s_setprio 1`
+around the delta-2 WMMA cluster (with `s_setprio 0` before the handoff barrier)
+also preserved 120 VGPR and exactness but fell to 42.595 TFLOPS. Finally,
+interleaving the refill as `A0,B,A1` reached 48.816 TFLOPS, exact but below
+the delta-2 leader. These close the remaining compiled schedule variants.
+
 ## Decision
 
 The correct block/K-major p8 kernel with progressive refill, scalar-offset
