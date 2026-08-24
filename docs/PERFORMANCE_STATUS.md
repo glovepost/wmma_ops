@@ -657,6 +657,15 @@ A 1,000-warmup qualification of delta-2 measured 49.099 TFLOPS over five
 timing blocks, with exact output. Extended warmup does not remove the
 sustained gap to 50 TFLOPS.
 
+The latest synchronization screen moved the final `lgkmcnt(0)` retirement wait
+after the publish barrier. It retained 120 VGPR and 18 KiB LDS and reached
+48.731 TFLOPS, but failed the full-output gate (`normalized_max_error=0.146452791`,
+cosine `0.999337587`), confirming that wait-before-barrier is required for LDS
+publication. Same-lock screens of the remaining prebuilt refill variants also
+closed B-first (48.689), A0/B/A1 (48.662), scheduler priority (42.253), and
+hybrid-A/B (43.768--44.479) forms. Every valid form was exact, but none
+advanced delta-2.
+
 ## Record protocol
 
 Use this protocol before promoting a result in the README:

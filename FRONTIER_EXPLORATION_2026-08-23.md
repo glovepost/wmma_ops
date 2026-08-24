@@ -1015,6 +1015,22 @@ by five timing blocks of 100 iterations) measured 49.099 TFLOPS with the full
 exactness tuple. It remains below the 50-TFLOPS gate, so extended warmup does
 not erase the sustained kernel gap.
 
+The loop-control experiment was repaired by moving `s_sub_u32` immediately
+before the back-edge branch and initializing the counter to `k_tiles-2`, so
+the borrow SCC survives all address updates. It is exact and avoids the
+compare, but a same-pass pair measured 48.866 versus 48.852 TFLOPS for the
+control (+0.014, within noise). The safe form is retained only as evidence,
+not as a performance promotion.
+
+The next synchronization test moved the final `lgkmcnt(0)` retirement wait
+after the publish barrier. It retained 120 VGPR and 18 KiB LDS and reached
+48.731 TFLOPS, but its full-output check failed (`normalized_max_error=0.146452791`,
+cosine `0.999337587`). The wait-before-barrier ordering is therefore a real
+publication requirement, not just a scheduling preference. A same-lock screen
+also closed the remaining prebuilt refill variants: B-first and A0/B/A1 were
+48.689 and 48.662 TFLOPS, scheduler priority was 42.253, and hybrid-A/B forms
+were 43.768--44.479 TFLOPS; all valid outputs were exact, but all regressed.
+
 ## Decision
 
 The correct block/K-major p8 kernel with progressive refill, scalar-offset
