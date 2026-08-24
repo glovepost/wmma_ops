@@ -3829,12 +3829,12 @@ tuple, but five processes measured 48.777, 48.740, 48.669, 48.624, and 48.788
 TFLOPS (48.720 average, 48.624 floor). The 49.094 short result was noise; this
 schedule change is closed.
 
-The K32-per-stage source specialization was screened next. Generic K2 launched
-at 44.350 TFLOPS but failed exactness (normalized error 1.356285863, cosine
--0.000246312). Its dedicated K2 ring repaired the output but reached only
-41.345 TFLOPS. The current K32 staging contract is therefore not competitive;
-a future attempt would need a new packed-layout design rather than another
-ring variant.
+The K32-per-stage source specialization was initially run with a host-packer
+mismatch: the kernel used K32 while `RECORD_K_SLICES` remained 1. That invalid
+44.350-TFLOPS result failed exactness. Rebuilding both sides for K32 repaired
+the output and measured 44.289 TFLOPS at two-block occupancy. Its dedicated K2
+ring remains exact at 41.345 TFLOPS; correct packing does not make K32 staging
+competitive.
 
 The half-word LDS swizzle companion was exact at two-block occupancy but
 reached only 38.402 TFLOPS. This layout permutation is also closed; further

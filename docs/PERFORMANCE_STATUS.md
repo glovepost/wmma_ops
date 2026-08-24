@@ -944,13 +944,13 @@ fragments, and branch semantics unchanged. The image stayed exact at
 
 ### 2026-08-24 K32 stage/ring screen
 
-The source K2 specialization (`WMMA_BP_K_SLICES=2`) was built for the
-256x128 packed record shape to publish two WMMA K16 slices per stage. It
-launched at 44.350 TFLOPS but failed the numerical gate badly (normalized
-maximum error 1.356285863, cosine -0.000246312), indicating an incompatible
-packing/accumulator contract in the generic K2 path. The dedicated K2 ring
-variant repaired exactness, but reached only 41.345 TFLOPS. K32 staging does
-not expose a route toward 50 TFLOPS without a new packing implementation.
+The source K2 specialization (`WMMA_BP_K_SLICES=2`) was first run with a
+host-packer mismatch: the kernel used K32 while `RECORD_K_SLICES` remained 1,
+so its 44.350-TFLOPS result failed exactness and was invalid. Rebuilding with
+both kernel and host packing set to K32 produced an exact 44.289 TFLOPS image
+at 120 VGPR/two-block occupancy. The dedicated K2 ring remains exact at 41.345
+TFLOPS. Correct packing repairs the generic path but does not make K32 staging
+competitive with delta-2.
 
 The companion `WMMA_BP_HALF_SWIZZLE=1` layout was also screened on the same
 256x128 packed shape. It passed the complete exactness tuple at unchanged
