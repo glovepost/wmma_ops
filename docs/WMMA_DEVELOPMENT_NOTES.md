@@ -3966,6 +3966,14 @@ five launches and reported four blocks/16 waves, but medians were 41.166,
 The smaller tile's traversal/refill cost dominates, so late-B1 is closed as a
 route to the 50-TFLOPS target.
 
+The hand-scheduled fixed-shape epilogue was then explored. Removing only the
+late N-fragment edge compares produced an apparent 49.117 TFLOPS timing, but
+the full output was wrong (normalized error 0.848721961, RMS 2.167147235,
+cosine 0.913690612). Removing the exec masks and branches as well yielded an
+invalid gfx1151 image before validation. The edge predicates are therefore
+load-bearing in the generated schedule; this fixed-tile specialization is
+closed until the epilogue is redesigned rather than mechanically stripped.
+
 The complementary one-sided B producer was then built with
 `WMMA_BP_HYBRID_B_PINGPONG=1`, leaving A in the active buffer. It stayed exact
 at two blocks/16 waves, but five medians were 45.090, 45.107, 44.805, 44.976,

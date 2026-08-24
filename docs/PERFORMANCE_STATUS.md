@@ -1033,6 +1033,18 @@ blocks/16 waves per CU. Medians were **41.166, 40.840, 40.764, 40.721, and
 block traversal and refill work outweigh the late B overlap; this ownership
 specialization is closed well below the 256x128 leader.
 
+### 2026-08-24 fixed-tile epilogue probe
+
+The hand-scheduled delta-2 tail was specialized for the exact 4096x4096
+benchmark by removing the late N-fragment edge compares while retaining the
+existing stores. The candidate briefly timed at **49.117 TFLOPS**, but failed
+the full-output gate (`normalized_max_error=0.848721961`, RMS `2.167147235`,
+cosine `0.913690612`). A second form removed the corresponding exec masks and
+branches entirely; the gfx1151 runtime rejected that image as `invalid device
+function` before validation. The apparent gain is rejected: these predicates
+are entangled with the generated exec state, and fixed-shape specialization is
+not a safe route without redesigning the epilogue from source.
+
 ### 2026-08-24 hybrid-B ping-pong screen
 
 The complementary one-sided producer was built with B ping-pong and A left in
