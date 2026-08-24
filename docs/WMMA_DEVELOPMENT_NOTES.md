@@ -4012,6 +4012,12 @@ were rejected by gfx1151 as `invalid device function` before occupancy. The
 original per-store address reconstruction remains required; no performance
 result is recorded.
 
+The synchronization follow-up moved the first refill `s_waitcnt vmcnt(2)` ahead
+of the publish barrier to overlap VMEM retirement with wave convergence. The
+gfx1151 loader rejected the assembled image as `invalid device function` before
+occupancy, so no timing or correctness result exists. The original
+barrier-then-wait ordering remains required.
+
 The complementary one-sided B producer was then built with
 `WMMA_BP_HYBRID_B_PINGPONG=1`, leaving A in the active buffer. It stayed exact
 at two blocks/16 waves, but five medians were 45.090, 45.107, 44.805, 44.976,

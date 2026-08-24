@@ -1099,6 +1099,14 @@ images were rejected by the gfx1151 runtime as `invalid device function` at
 the occupancy query. No timing or correctness result exists; the existing
 per-store address reconstruction remains the supported hand-assembly form.
 
+### 2026-08-24 pre-barrier VMEM wait screen
+
+The first refill `s_waitcnt vmcnt(2)` was moved ahead of the publish barrier,
+with the post-barrier copy of that wait removed. The assembled image was
+rejected by gfx1151 as `invalid device function` during the occupancy query;
+there is no correctness or timing result. The existing barrier-then-VMEM-wait
+ordering is therefore a code-object boundary as well as the measured control.
+
 ### 2026-08-24 hybrid-B ping-pong screen
 
 The complementary one-sided producer was built with B ping-pong and A left in
