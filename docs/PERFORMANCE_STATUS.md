@@ -433,6 +433,18 @@ addresses are independent. Close issue-order permutations as a negative result;
 the retained schedule remains the compiler order plus the delta-2 register
 phase.
 
+The source-supported `warp_tile_m=2` geometry was also screened as a genuinely
+different wave architecture. A `256x128` block used 16 waves and 91 VGPR, but
+the specialized loader faulted on the first dispatch, so it is invalid rather
+than a timing result. A `128x128`/eight-wave form assembled at 99 VGPR but
+faulted with a GPU memory access error before validation. The prefetch-position
+permutations that did run (A0/A1/B at 0/1/2, 1/0/2, and 0/2/1) retained
+exactness; the default order reached 49.371 in the short bracket while the
+alternatives reached 49.190/49.181 versus a 49.199 control. Treat these as
+closed: the default prefetch order and eight-wave `256x128` geometry remain
+the research base, and the warp-tile-2 path needs a loader-contract rewrite
+before it can be evaluated fairly.
+
 At 256 GB/s, the corresponding compute-to-memory ridge point is about
 232 FLOP/byte (`59.4e12 / 256e9`), not 106 FLOP/byte. Both inputs should be
 replaced by observed clocks and sustained bandwidth when making a measured
