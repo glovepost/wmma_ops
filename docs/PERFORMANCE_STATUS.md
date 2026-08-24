@@ -583,6 +583,11 @@ on average (candidate floor 48.982 versus control floor 49.052). The initial
 48.985-TFLOPS screen was package-state noise, so the original LDS order stays
 the control.
 
+Relaxing the hot-loop `lgkmcnt` waits by one produced a 49.117-TFLOPS timing
+sample but failed correctness (`normalized_max_error=137.345592071`, cosine
+`0.693088403`). The current wait thresholds are load-bearing and remain
+unchanged.
+
 ## Record protocol
 
 Use this protocol before promoting a result in the README:

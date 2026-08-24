@@ -922,6 +922,11 @@ average, 48.982 floor), versus fresh delta-2 controls at 49.223, 49.211,
 critical path therefore loses 0.086 TFLOPS and is rejected; the apparent
 single-screen 48.985 result was package-state noise.
 
+Relaxing the hot-loop LDS waits by one (`lgkmcnt 4->5` and `2->3`) looked
+promising at 49.117 TFLOPS, but failed the numerical gate catastrophically:
+normalized maximum error 137.345592071 and cosine 0.693088403. The existing
+wait thresholds are therefore load-bearing and remain unchanged.
+
 ## Decision
 
 The correct block/K-major p8 kernel with progressive refill, scalar-offset
