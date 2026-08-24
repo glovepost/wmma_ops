@@ -894,6 +894,15 @@ also confirm that apparent A-fragment hoisting is not the sole cause of the
 prefetch live ranges. The delta-2 assembly leader therefore remains the control
 for the next hand-scheduled register/WMMA experiment.
 
+A refill-order screen then moved the next B global load and its post-barrier
+LDS stores ahead of the two A fragments (`B,A0,A1` instead of `A0,A1,B`).
+The transformation preserved the 120-VGPR/22-SGPR/18-KiB-LDS resource tuple
+and the complete reference error tuple. Five fresh processes measured
+48.846, 48.889, 48.798, 48.690, and 48.784 TFLOPS (48.801 average,
+48.690 floor), below the delta-2 control and therefore rejected. The apparent
+positive single-pass signal was scheduling/power noise, not a transferable
+gain; the original refill order remains the comparison baseline.
+
 ## Decision
 
 The correct block/K-major p8 kernel with progressive refill, scalar-offset
