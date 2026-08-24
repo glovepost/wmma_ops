@@ -983,6 +983,15 @@ terminated under the exclusive-run watchdog; no timing or correctness result
 is recorded. This is a synchronization/launch failure, not evidence of an
 A-prefetch benefit.
 
+### 2026-08-24 mixed global-load clause screen
+
+The hot-loop `s_clause` was extended from the two A loads to the A/A/B global
+load trio, with no address, register, or wait changes. The candidate stayed
+exact at 120 VGPR/two-block occupancy. Five fresh processes measured 48.961,
+48.858, 48.840, 48.854, and 48.946 TFLOPS (48.892 average, 48.840 floor),
+below delta-2; the 49.103 short screen was package variation. Clause grouping
+is closed as an independent gain.
+
 ### 2026-08-24 asymmetric LDS padding screen
 
 Complementary A/B stride pairs were tested on the packed 256x128 source

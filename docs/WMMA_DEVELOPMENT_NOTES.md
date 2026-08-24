@@ -3857,6 +3857,12 @@ occupancy or validation output and was terminated. It has no timing result and
 is rejected as a synchronization/launch failure rather than a performance
 candidate.
 
+The hot-loop global-load clause was widened to include A0, A1, and the B
+prefetch together. It remained exact at unchanged occupancy, but five
+processes measured 48.961, 48.858, 48.840, 48.854, and 48.946 TFLOPS (48.892
+average, 48.840 floor). The isolated 49.103 result was noise; clause grouping
+does not close the gap.
+
 Complementary asymmetric A/B padding pairs (4/12, 12/4, 2/14, 14/2, 6/10,
 10/6) all stayed exact but measured only 25.755--27.389 TFLOPS. The stride
 phases cannot be decoupled without upsetting the WMMA/LDS access pattern, so
