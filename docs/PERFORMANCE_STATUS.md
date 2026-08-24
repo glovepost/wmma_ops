@@ -1026,6 +1026,13 @@ The source paired-B path (`WMMA_BP_B_PAIR=1`) was screened on the retained
 reached only 47.698 TFLOPS in the 20-warmup/50-iteration screen. Pairing B
 loads/consumers is below delta-2 and is closed for this shape.
 
+### 2026-08-24 native LDS load-width screen
+
+Forcing `WMMA_NATIVE_LOAD_BITS=64` changed each native half fragment load from
+128-bit to two 64-bit transactions. The packed 256x128 image stayed exact at
+120 VGPR/two-block occupancy but reached only 41.618 TFLOPS. The wider native
+load is not the missing bottleneck; 64-bit LDS loads are closed.
+
 ### 2026-08-24 asymmetric LDS padding screen
 
 Complementary A/B stride pairs were tested on the packed 256x128 source

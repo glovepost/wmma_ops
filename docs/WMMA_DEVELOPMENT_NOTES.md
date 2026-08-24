@@ -3881,6 +3881,10 @@ The source paired-B staging path was also screened on 256x128. It remained
 exact at unchanged occupancy but reached only 47.698 TFLOPS, so B pairing is
 closed as a standalone optimization.
 
+Forcing 64-bit native LDS fragment loads was also exact at unchanged occupancy
+but reached only 41.618 TFLOPS. Narrowing the native load width is closed as a
+performance path.
+
 Resizing the source `c_n` and packed-path `a_frag` arrays for eight M-fragments
 removed the obvious out-of-bounds state, but the image still produced
 non-finite output behind an invalid 87.047-TFLOPS timing. The remaining
