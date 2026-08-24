@@ -592,6 +592,11 @@ Removing only the pre-publish `lgkmcnt(0)` wait, while retaining the VMEM
 wait and both barriers, remained exact but reached 48.904 TFLOPS. The wait is
 not redundant on gfx1151 and remains part of the control sequence.
 
+Moving the intermediate `lgkmcnt(2)` wait one WMMA later reached 49.073
+TFLOPS but failed validation (`finite=no`, normalized maximum error
+0.100156495, NaN RMS/cosine). The current wait placement is a real fragment
+dependency boundary and remains unchanged.
+
 ## Record protocol
 
 Use this protocol before promoting a result in the README:

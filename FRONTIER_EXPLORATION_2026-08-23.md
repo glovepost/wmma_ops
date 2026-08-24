@@ -933,6 +933,11 @@ barriers. It remained exact with unchanged resources but reached 48.904
 TFLOPS. The wait is therefore not redundant on gfx1151; the original
 pre-barrier retirement sequence remains the control.
 
+Moving the intermediate `lgkmcnt(2)` wait one WMMA later reached 49.073
+TFLOPS, but failed validation (`finite=no`, normalized maximum error
+0.100156495, NaN RMS/cosine). The current wait placement is a real fragment
+dependency boundary and is retained.
+
 ## Decision
 
 The correct block/K-major p8 kernel with progressive refill, scalar-offset
