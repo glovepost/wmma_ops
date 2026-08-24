@@ -599,6 +599,37 @@ result is a 5.8--7.3% regression even though occupancy, p8 bank phase, global
 traffic, and arithmetic are unchanged. The experiment remains opt-in and the
 default device code is instruction-identical after CUID/comment normalization.
 
+### P8 two-address LDS qualification
+
+The closest earlier paired-LDS result used p4 because
+`ds_load_2addr_b64` encodes two unsigned eight-bit offsets in eight-byte units.
+At p8, the fourth 16-row fragment starts at unit 288 and cannot use the
+original base directly. A deterministic assembly transform now creates two
+loop-invariant bases shifted by 512 bytes (64 units), placing those final
+fragment offsets at 224--227. This adds two address VGPRs outside the loop and
+assembles at 121 VGPR, 22 SGPR, 18 KiB LDS, and zero spills.
+
+The all-paired form converts both fragment reads and cooperative refill stores
+to `ds_*_2addr_b64`. It passed the full rocBLAS tuple and the host API reported
+three blocks/24 waves, up from the retained kernel's two blocks/16 waves. The
+extra nominal residency did not help: two runs reached 44.468/44.428 TFLOPS
+against 47.914/47.991 same-pass p8 controls.
+
+A read-only isolation restored the three native `ds_store_b128` refill stores
+while retaining the paired loads. It remained exact at the same resource and
+occupancy report, but reached 43.442/42.041 TFLOPS in a lower-clock bracket
+whose controls reached 44.932/45.055. The absolute values from that bracket
+must not be mixed with the preceding pass; both same-pass comparisons still
+reject the candidate.
+
+The p4 two-address improvement therefore does not transfer to p8. The p8
+kernel's native contiguous 128-bit LDS transaction is part of its singular
+bank/issue optimum; replacing it with paired 64-bit addresses loses 7.3% in
+the clean bracket despite more reported waves. Restoring native stores makes
+the result worse, so the read transaction--not merely the handoff store--is
+the closed frontier. The shifted-base transform is retained to prevent the
+offset-encoding limitation from being mistaken for an untested opportunity.
+
 ## Decision
 
 The correct block/K-major p8 kernel materially exceeds the original-layout

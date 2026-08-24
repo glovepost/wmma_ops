@@ -3352,3 +3352,32 @@ the extra wait threshold extends the dependency graph. Moving work out of the
 handoff is not useful when it merely moves that work onto the compute path.
 The ordinary default device instructions remain unchanged after normalizing
 the generated HIP CUID and assembly comments.
+
+### 2026-08-23: P8 `ds_load_2addr_b64` with shifted bases
+
+The earlier hand-scheduled two-address LDS kernel was limited to p4 because
+the instruction offsets are unsigned eight-bit values in eight-byte units. A
+p8 row consumes six units, putting the fourth 16-row fragment at 288. The new
+`tools/make-p8-read2.py` transform adds A/B bases shifted by 512 bytes, so that
+fragment uses offsets 224--227. Both bases are computed once before the hot
+loop. The resulting code object uses 121 VGPR, 22 SGPR, 18 KiB LDS, and zero
+spills.
+
+Two forms were tested:
+
+| Form | TFLOPS | Same-pass p8 controls | Reported occupancy |
+|---|---:|---:|---:|
+| Paired LDS reads and stores | 44.468 / 44.428 | 47.914 / 47.991 | 3 blocks / 24 waves |
+| Paired reads, native b128 stores | 43.442 / 42.041 | 44.932 / 45.055 | 3 blocks / 24 waves |
+
+All four outputs reproduced the full rocBLAS error tuple. The second bracket
+ran at a visibly lower package state, so its absolute TFLOPS are not compared
+to the first bracket; its own opening and closing controls still reject the
+read-only form.
+
+This experiment removes the encoding ambiguity and supplies another occupancy
+counterexample. P8 native `ds_load_b128` is better than two independently
+addressed 64-bit halves even when the latter reports eight more active waves.
+Native refill stores do not rescue it, isolating the regression to the paired
+read schedule rather than the store handoff. Do not revisit the p8 offset
+limit without a new LDS instruction or a different physical fragment layout.

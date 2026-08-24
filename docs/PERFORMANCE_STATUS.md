@@ -329,6 +329,14 @@ workgroup barriers, so the added LDS contention and wait threshold cost more
 than the shorter serial handoff saves. The opt-in implementation leaves the
 default device code instruction-identical.
 
+The remaining p8 paired-LDS encoding gap is also closed. Two loop-invariant
+512-byte-shifted bases make the fourth `ds_load_2addr_b64` fragment fit its
+eight-bit offsets. The kernel is exact at 121 VGPR and 18 KiB LDS and reports
+three blocks/24 waves, but paired reads/stores reached only 44.468/44.428
+TFLOPS versus 47.914/47.991 controls. Restoring native b128 stores did not
+rescue the paired reads: it reached 43.442/42.041 versus same-pass
+44.932/45.055 controls. The native p8 `ds_load_b128` schedule remains best.
+
 At 256 GB/s, the corresponding compute-to-memory ridge point is about
 232 FLOP/byte (`59.4e12 / 256e9`), not 106 FLOP/byte. Both inputs should be
 replaced by observed clocks and sustained bandwidth when making a measured
