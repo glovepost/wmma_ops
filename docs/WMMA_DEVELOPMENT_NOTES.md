@@ -4077,3 +4077,9 @@ and the handoff patch has no matching descriptor. Adjusting the register-phase
 tool to that allocation produced dual-VALU VGPR-bank conflicts rejected by the
 gfx1151 assembler. This combined path produced no loadable image and is not a
 performance result.
+
+The DPP source was also swept with a delta-4 register phase, which preserves
+the four-bank dual-VALU pairing that delta-2 violates. Safe boundaries from
+33 through 81 all assembled and stayed exact, but the resulting 121-VGPR
+images admitted three blocks/24 waves and reached only 41.106--41.383 TFLOPS
+in 5/5 screens. This closes DPP register-phase shifts as a route to 50.

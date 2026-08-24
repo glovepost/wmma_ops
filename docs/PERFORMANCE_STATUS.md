@@ -1284,3 +1284,9 @@ two-register phase shift was attempted with the adjusted allocation, but the
 gfx1151 assembler rejected dual-VALU operands for VGPR bank conflicts. No
 combined image was loadable; the standalone hand schedule and source DPP path
 remain separate.
+
+As a follow-up, a delta-4 phase shift (the smallest shift preserving the DPP
+dual-VALU bank pairing) assembled across safe boundaries 33--81. The images
+were exact but moved to three blocks/24 waves and measured 41.106--41.383
+TFLOPS in 5/5 screens. DPP register shifts therefore do not approach the hand
+leader; the unshifted source DPP image remains the only useful reference.
