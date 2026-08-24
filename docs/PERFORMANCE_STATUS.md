@@ -1081,6 +1081,12 @@ far below the packed leader. The architecture is now correctly closed as a
 throughput regression; the initial deadlock was a harness error, not a kernel
 result.
 
+The complementary wide ring (`WMMA_PC_WIDE=1`, one producer plus eight
+consumers, nine launched waves) was also exact but reached only **6.517 TFLOPS**
+in a 5-warmup/5-iteration screen at three blocks/27 waves per CU. The extra
+consumer polling and narrower per-wave N tile make this architecture clearly
+noncompetitive; no longer promotion run is warranted.
+
 ### 2026-08-24 K-loop SCC shortcut
 
 The hand assembly's K-loop decrement was tested as the source of the back-edge

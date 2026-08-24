@@ -3999,6 +3999,11 @@ three fresh processes measured only 13.070, 12.746, and 12.800 TFLOPS (12.872
 average). The two-producer ring is therefore correctly closed as a throughput
 regression; the initial deadlock was not a kernel conclusion.
 
+The wide producer/consumer variant was then launched correctly with nine waves
+(one producer and eight consumers). It passed exactness but reached only 6.517
+TFLOPS in a 5-warmup/5-iteration screen at three blocks/27 waves per CU. The
+wide ring is closed as a throughput regression without a longer promotion run.
+
 The next scalar-control probe removed the K-loop `s_cmp_eq_u32 s6, 0`, relying
 on the preceding decrement's SCC for the back-edge branch. Although the image
 assembled, gfx1151 rejected it as `invalid device function` before occupancy
