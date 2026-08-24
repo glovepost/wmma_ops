@@ -601,6 +601,16 @@ sample but failed correctness (`normalized_max_error=137.345592071`, cosine
 `0.693088403`). The current wait thresholds are load-bearing and remain
 unchanged.
 
+### 2026-08-24 wave-range scheduling screen
+
+The source block-prepacked kernel was rebuilt with tighter
+`amdgpu_waves_per_eu` ranges to test whether occupancy metadata could improve
+the producer/consumer schedule. All candidates passed the exactness tuple and
+reported two active blocks/16 waves per CU. The 20-warmup/50-iteration medians
+were 47.549 TFLOPS (1--2), 47.622 (2--2), and 47.608 (1--4), below the source
+control and far below the hand-scheduled delta-2 image. Wave-range metadata is
+therefore closed as an independent route to 50 TFLOPS.
+
 ### 2026-08-24 accumulator-bank permutation screen
 
 The hand image was rebuilt with a cyclic permutation of the physical FP16

@@ -60,6 +60,12 @@ were rejected by the gfx1151 loader before occupancy/correctness, whereas the
 known pairwise bank swap still loads. This is recorded as an unsupported image
 mapping, not as a performance result; the delta-2 leader remains unchanged.
 
+The source block-prepacked kernel was also rebuilt with tighter wave-range
+metadata (1--2, 2--2, and 1--4 waves per EU). Each candidate stayed exact and
+reported the same two-block/16-wave occupancy, but measured 47.549, 47.622,
+and 47.608 TFLOPS respectively. The scheduling attribute does not expose the
+missing headroom and is closed as a standalone optimization.
+
 The output epilogue was specialized for the divisible 4096x4096 benchmark so
 each fragment stores directly without per-element bounds checks. It remained
 exact at 47.850 TFLOPS with two resident blocks, which shows that tail
