@@ -44,6 +44,16 @@ candidate retained two-block/16-wave occupancy and the exact output tuple, but
 measured 47.986 TFLOPS. This spacing change alone is slower than the retained
 hand-scheduled phase-delta kernel and was not promoted.
 
+## 2026-08-24: block traversal follow-up
+
+The hand-scheduled delta-2 kernel was compared with the mapping layer's Morton
+and CU-oriented modes. Modes 1/2/5/6 were exact but reached only 46.438,
+46.463, 46.136, and 45.853 TFLOPS in the source screen, below the retained
+leader. A fixed-4096 row-major override was also attempted in the hand image;
+the loader rejected that manually shortened code object before launch. No
+candidate or mapping claim was promoted, and all temporary artifacts were
+removed after the lock was released.
+
 The output epilogue was specialized for the divisible 4096x4096 benchmark so
 each fragment stores directly without per-element bounds checks. It remained
 exact at 47.850 TFLOPS with two resident blocks, which shows that tail

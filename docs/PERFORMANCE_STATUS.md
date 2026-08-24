@@ -877,3 +877,20 @@ their LDS loads and WMMA operands. The exact candidate retained 120 VGPR and
 two-block occupancy, but five medians averaged about 48.711 TFLOPS. The
 49.585-TFLOPS short sample was package noise; final-tile B placement alone is
 closed.
+
+### 2026-08-24 block traversal screen
+
+The prepacked kernel's mapping layer exposes Morton and CU-oriented traversal
+modes in addition to the default XOR-snake order. Source controls at modes
+1, 2, 5, and 6 passed the complete exactness tuple, but their
+20-warmup/50-iteration medians were 46.438, 46.463, 46.136, and 45.853 TFLOPS.
+Alternate traversal therefore did not recover the hand-scheduled leader's
+gap.
+
+A separate fixed-shape experiment replaced the generic reciprocal/XOR mapper
+in the hand assembly with a 4096-square row-major shift and mask. The code
+object was rejected by the gfx1151 loader before the occupancy query could
+run; it produced no timing or correctness result. This is a launch-contract
+failure, not evidence for or against row-major locality. Temporary assembly
+and binaries were deleted, and the existing mapping and delta-2 schedule are
+unchanged.
