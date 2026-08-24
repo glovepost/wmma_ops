@@ -4038,3 +4038,10 @@ averaged 48.952 versus 48.893. Applying all three relaxations together fell
 to 49.597 in the short screen. The original 6/4/2 dependency ladder remains
 the safe schedule; these isolated wait edits are closed as noise-sensitive
 rather than a new architecture.
+
+For completeness, the complementary normal-layout 128x256 ownership geometry
+was rebuilt with two M waves and four N waves. It retained two-block/16-wave
+occupancy and the exact packed output tuple, but measured 46.809 TFLOPS in a
+10/10 screen. This confirms that doubling N while halving the M stripe does not
+recover the leader; the 256x128 ownership geometry remains the only viable
+source shape in this family.

@@ -1235,3 +1235,12 @@ averaged 48.952 versus 48.893 for controls. The apparent gains are therefore
 within package noise, while the combined 4/3/1 ladder fell to 49.597 in the
 short screen. Retain the original 6/4/2 ladder; wait-threshold relaxation is
 closed as a standalone route to 50 TFLOPS.
+
+### 2026-08-24 normal 128x256 ownership screen
+
+The complementary N-wide ownership geometry was rebuilt from the packed source
+with a 128x256 block (2 M waves × 4 N waves), rather than the retained 256x128
+tile. It used two resident blocks/16 waves and passed the full exactness tuple,
+but reached **46.809 TFLOPS** in a 10-warmup/10-iteration screen. The smaller
+M stripe loses reuse and cannot repay its additional N-fragment issue work;
+normal 128x256 ownership is closed below delta-2.
