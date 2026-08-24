@@ -3649,3 +3649,10 @@ exact normalized error tuple. The all-group result is a useful short-screen
 candidate, not a new record: its approximately 0.34% edge over the two-control
 midpoint is not separated from package/order drift and it has no fresh-process
 50-TFLOPS qualification.
+
+The subsequent five-fresh-process screen used 20 warmups and five 100-iteration
+timing blocks per process. Delta-2 base medians were 49.173/49.162/48.910/
+48.798/48.694 TFLOPS; all-group 0312 medians were 49.066/48.809/48.515/48.834/
+48.830. Full validation passed every process, but the row-order candidate lost
+to its immediately preceding control in all five pairs. Close row-order
+permutations as noise and retain the unpermuted delta-2 phase.

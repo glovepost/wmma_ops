@@ -295,6 +295,13 @@ keep it below promotion. Every process reproduced normalized maximum error
 0.018779343, RMS 0.035428338, and cosine 0.999977929. Retain all-group 0312
 as the next short-screen candidate; do not replace the delta-2 leader yet.
 
+The required fresh-process comparison then closed that candidate. With 20
+warmups and five 100-iteration timing blocks per process, the base medians were
+49.173/49.162/48.910/48.798/48.694 TFLOPS. The all-group 0312 medians were
+49.066/48.809/48.515/48.834/48.830 TFLOPS. Every process was exact, but the
+candidate lost to its immediately preceding control in all five pairs. Close
+row-order permutations as noise and keep the delta-2 allocation unchanged.
+
 The latest occupancy-preserving barrier experiments did not close that gap.
 A hand-scheduled compact interleaved ping-pong kernel retained 118 VGPR, two
 blocks/16 waves, 30 KiB LDS, and one barrier per K16, but reached only 46.024

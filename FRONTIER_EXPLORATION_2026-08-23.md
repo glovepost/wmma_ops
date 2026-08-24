@@ -386,6 +386,21 @@ midpoint, but the sign is not isolated from package/order drift and no fresh
 process passed the 50-TFLOPS gate. Keep it as the next short-screen candidate;
 the delta-2 allocation remains the qualified research base.
 
+The five-fresh-process qualification rejected it decisively. Each process used
+20 warmups and five 100-iteration timing blocks:
+
+| Process | Delta-2 base | All-group 0312 |
+|---:|---:|---:|
+| 1 | 49.173 | 49.066 |
+| 2 | 49.162 | 48.809 |
+| 3 | 48.910 | 48.515 |
+| 4 | 48.798 | 48.834 |
+| 5 | 48.694 | 48.830 |
+
+Every process reproduced the full error tuple, but the candidate lost its
+immediately preceding control in all five pairs. This closes row-order
+permutations as a scheduling route; retain the unpermuted delta-2 allocation.
+
 ### Late one-barrier and geometry sweep
 
 The remaining one-barrier layouts were implemented and screened against a
