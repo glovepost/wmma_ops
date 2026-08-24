@@ -445,6 +445,12 @@ closed: the default prefetch order and eight-wave `256x128` geometry remain
 the research base, and the warp-tile-2 path needs a loader-contract rewrite
 before it can be evaluated fairly.
 
+A targeted loader repair for the `128x128`/eight-wave form then removed the
+out-of-bounds B-vector read and ran without a fault, but its full-output check
+still failed (normalized max error 0.08731, RMS 0.44221) at 37.432 TFLOPS. The
+repair is not retained: the experiment proves that this geometry needs a
+complete lane-to-row B mapping, not just a bounds fix.
+
 At 256 GB/s, the corresponding compute-to-memory ridge point is about
 232 FLOP/byte (`59.4e12 / 256e9`), not 106 FLOP/byte. Both inputs should be
 replaced by observed clocks and sustained bandwidth when making a measured
