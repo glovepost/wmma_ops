@@ -1150,6 +1150,11 @@ The paired A-LDS request order was also screened. It preserved exact output and
 the 120-VGPR resource class but averaged about 48.629 TFLOPS across five
 processes, so LDS request ordering alone is closed.
 
+The A0/A1 fragment register groups were also permuted consistently through the
+loads, refill stores, and WMMA operands. The exact 120-VGPR candidate averaged
+about 48.855 TFLOPS across five processes, so A operand-bank placement alone is
+closed.
+
 The complementary 256x192 tile was rejected before timing because the fixed
 4096-wide problem is not divisible by 192. Its edge workgroup faulted on the
 packed/output bounds, so it supplies no kernel performance result.

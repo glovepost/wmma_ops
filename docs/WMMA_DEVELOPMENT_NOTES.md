@@ -3772,6 +3772,11 @@ Finally, paired A LDS requests were reordered by bank offset without changing
 their destinations or waits. The candidate was exact but averaged about
 48.629 TFLOPS across five processes. This issue-order variant is closed.
 
+An A-fragment register permutation then swapped the A0/A1 groups together with
+all loads, stores, and WMMA uses. It remained exact at unchanged occupancy, but
+averaged about 48.855 TFLOPS across five processes. Physical A-bank placement
+alone is not a route to 50.
+
 The complementary 256x192 tile was not a valid benchmark geometry: 192 does
 not divide 4096, and its edge workgroup faulted before validation. No timing is
 recorded; non-divisible tiles require a separate bounds-safe harness.

@@ -859,3 +859,11 @@ bank-offset order while preserving destination registers and all waits. The
 variant stayed exact at the same 120-VGPR/two-block resource tuple, but fresh
 process medians averaged about 48.629 TFLOPS. Request ordering is therefore not
 an independent gain; the original hand schedule remains the control.
+
+### 2026-08-24 A-fragment register permutation
+
+The A0/A1 fragment register groups were swapped consistently in loads, refill
+stores, and WMMA operands, changing physical operand-bank placement without
+changing dataflow or resources. The corrected candidate passed exactness at
+120 VGPR/two blocks, but five medians averaged about 48.855 TFLOPS. A-fragment
+register placement alone is closed.
