@@ -1088,6 +1088,12 @@ both are below the 49.035-TFLOPS leader, the raw-buffer-only path is closed.
 The temporary include override was removed; no source or binary artifact from
 the experiment is part of the retained branch.
 
+The previously faulting `warp_tile_m=2` partition was revisited with the
+launcher and kernel both set to 128x128. A source repair expanded the B load to
+the complete half-wave tile, but the candidate still failed at launch before
+validation. This is a loader/fragment contract failure, not a throughput
+measurement; the partition remains closed pending a redesign.
+
 ## Decision
 
 The correct block/K-major p8 kernel with progressive refill, scalar-offset
