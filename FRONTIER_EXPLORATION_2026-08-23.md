@@ -1072,6 +1072,14 @@ candidate passed the complete exactness tuple yet measured 37.486 TFLOPS in a
 100-warmup/100-iteration screen. Reusing A across N does not repay the lost
 two-block residency, so the supertile architecture is closed.
 
+The transposed 128x256 block was also compiled as an eight-wave, two-block
+control. It used 119 VGPR and 18 KiB LDS, passed the full exactness tuple, and
+measured 45.930 TFLOPS. A hand conversion of its refill loads to scalar-offset
+MUBUF briefly timed above 50 TFLOPS, but failed the numerical gate with
+normalized error 1.34 and cosine near zero. The transposed address/descriptor
+contract must be regenerated from source; textual conversion is not safe, so
+that apparent result is explicitly rejected.
+
 ## Decision
 
 The correct block/K-major p8 kernel with progressive refill, scalar-offset

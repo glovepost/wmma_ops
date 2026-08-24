@@ -3682,6 +3682,13 @@ twice as many N columns, compiling at 119 VGPR, 22 SGPR, and 24 KiB LDS. The
 the exact output gate it reached 37.486 TFLOPS. The result confirms that A reuse
 alone cannot replace the current two-block 256x128 schedule.
 
+The transposed 128x256 control retained two-block residency and passed exact
+validation at 45.930 TFLOPS with 119 VGPR and 18 KiB LDS. A textual conversion
+of its global refills to scalar-offset MUBUF produced an apparent >50-TFLOPS
+timing, but normalized error was 1.34 with near-zero cosine. This is a useful
+warning: the transposed source has a different pointer/address contract and
+cannot inherit the 256x128 hand assembly by register substitution.
+
 The corresponding FP16 transfer screen found a hard resource/layout boundary.
 The supported 128x128 four-wave block-prepacked mapping compiled at 153 VGPR
 and 12 KiB LDS, passed the exact output check, and measured 40.661 TFLOPS. A
