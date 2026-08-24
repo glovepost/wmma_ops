@@ -626,6 +626,11 @@ Indexed/static double-buffer forms reached 22.358–40.765 TFLOPS across their
 padding variants, all exact. The extra LDS residency and index arithmetic lose
 the leader's two-block occupancy, so this family is closed.
 
+K32 ring proxies reached only 32.060–35.487 TFLOPS across minimal, reuse-B,
+W8, and fenced forms, despite exact output. Their extra LDS traffic and
+handoff work dominate, so extending the ring to K64 is not a promising direct
+path.
+
 ## Record protocol
 
 Use this protocol before promoting a result in the README:

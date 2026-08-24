@@ -975,6 +975,12 @@ forms reached 40.765/24.956/30.336 TFLOPS; static p0/p4/p8 forms reached
 Every result was exact, but the extra LDS residency and index arithmetic lose
 the two-block occupancy of the delta-2 control.
 
+Reduced-overhead K32 ring proxies were screened as a barrier-amortization
+check: `minimal`, `reuseb`, `w8`, and `fenced` reached 32.060, 35.090, 35.487,
+and 32.366 TFLOPS respectively. All were exact under the K32-slice-prepacked
+contract. The ring's extra LDS traffic and handoff work dominate, so a K64
+design cannot be justified by simply extending this implementation.
+
 ## Decision
 
 The correct block/K-major p8 kernel with progressive refill, scalar-offset
