@@ -72,8 +72,10 @@ __global__ __launch_bounds__(kThreads) void iu4_gemm(
     int n,
     int k)
 {
-    constexpr int kPairSlices = IU4_PAIR_K == 2 ? 4 : 2;
+    constexpr int kPairSlices = IU4_PAIR_K > 0 ? IU4_PAIR_K * 2 : 2;
     constexpr int kLdsBuffers = IU4_PAIR_K ? kPairSlices * 2 : 2;
+    static_assert(IU4_PAIR_K == 0 || IU4_PAIR_K == 1 || IU4_PAIR_K == 2
+                  || IU4_PAIR_K == 4);
     __shared__ uint32_t a_lds[kLdsBuffers][kBlockM][kLdsStrideWords];
     __shared__ uint32_t b_lds[kLdsBuffers][kBlockN][kLdsStrideWords];
 

@@ -1326,6 +1326,11 @@ the one-slice controls were 83.861, 84.621, 84.484, 84.867, and 84.969 (average
 is not an FP16 TFLOPS result and cannot be substituted for the 49.035 FP16
 leader without changing the activation/weight and scale contract.
 
+An eight-slice ring (`-DIU4_PAIR_K=4`, 16 rotating LDS slots, 32 KiB LDS per
+block) remained exact at 4096 cubed but reached only **92.056 INT4 TOPS** in a
+10-warmup/10-timing screen. The extra resident state does not repay its LDS
+traffic and occupancy pressure; four slices remain the selected IU4 depth.
+
 The paired-K ring was then generalized from two to four resident K16 slices
 (`-DIU4_PAIR_K=2`), using eight rotating LDS slots and one publication per
 four slices. A second fresh five-process bracket (10 warmups/10 timings per

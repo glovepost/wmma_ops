@@ -4119,3 +4119,8 @@ the two-slice control. A separate earlier bracket had one 84.765 TOPS outlier;
 it is retained as noise evidence, not as the promoted number. Four-slice IU4
 is the strongest integer-WMMA architecture so far, while the FP16 50-TFLOPS
 gate remains open and the ROCMFP4 codebook contract is unchanged.
+
+An eight-slice extension (`-DIU4_PAIR_K=4`) was also exact, but reached only
+92.056 INT4 TOPS at 4096 cubed. Its 32 KiB LDS footprint and larger staging
+arrays erase the four-slice gain, so the ring-depth screen closes at four
+slices; unsupported non-dividing depths are guarded by a compile-time check.
