@@ -1065,6 +1065,13 @@ screen. The small shifts expose a severe LDS bank-phase penalty and the 16-byte
 shift still regresses the control, so the winning VGPR phase is not
 independently composable with a B-bank shift.
 
+The new 256x256 supertile was then compiled to test A reuse across a doubled N
+tile. It used the same per-wave fragment footprint, 119 VGPR, 22 SGPR, and 24
+KiB LDS, but its 16-wave block admitted only one resident block per CU. The
+candidate passed the complete exactness tuple yet measured 37.486 TFLOPS in a
+100-warmup/100-iteration screen. Reusing A across N does not repay the lost
+two-block residency, so the supertile architecture is closed.
+
 ## Decision
 
 The correct block/K-major p8 kernel with progressive refill, scalar-offset

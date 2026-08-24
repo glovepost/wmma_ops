@@ -712,6 +712,12 @@ expose a severe LDS bank-phase penalty; the 16-byte form still regresses the
 control. The winning VGPR phase is not independently composable with a B-bank
 shift.
 
+The 256x256 supertile was compiled to test A reuse across a doubled N tile. It
+used 119 VGPR, 22 SGPR, and 24 KiB LDS, but its 16-wave block admitted only one
+resident block per CU. The candidate passed the complete exactness tuple and
+reached 37.486 TFLOPS in a 100-warmup/100-iteration screen. Reusing A across N
+does not repay the lost two-block residency; this supertile is closed.
+
 ## Record protocol
 
 Use this protocol before promoting a result in the README:

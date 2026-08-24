@@ -3675,6 +3675,13 @@ threshold only under the separate integer contract; it does not alter the
 a useful architecture to revisit with a smaller FP16 tile or a different
 producer/consumer partition.
 
+A 256x256 FP16 supertile was tested as the first new fragment/dataflow
+architecture. It preserves the per-wave fragment footprint and reuses A across
+twice as many N columns, compiling at 119 VGPR, 22 SGPR, and 24 KiB LDS. The
+16-wave block permits only one resident block per CU, however; despite passing
+the exact output gate it reached 37.486 TFLOPS. The result confirms that A reuse
+alone cannot replace the current two-block 256x128 schedule.
+
 The corresponding FP16 transfer screen found a hard resource/layout boundary.
 The supported 128x128 four-wave block-prepacked mapping compiled at 153 VGPR
 and 12 KiB LDS, passed the exact output check, and measured 40.661 TFLOPS. A
