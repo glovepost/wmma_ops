@@ -3841,6 +3841,11 @@ not make K32 staging competitive.
 The corrected K2 no-explicit-VMEM-wait form was also exact but reached 44.321
 TFLOPS versus 44.289 for the control. The K32 handoff cost remains load-bearing.
 
+The alternate slice-major K32 host packing was also tested. It ran at 44.424
+TFLOPS but failed exactness with normalized error 1.356285863 and cosine
+-0.000246312. The K2 address contract is block/K-major; slice-major packing is
+not compatible.
+
 The half-word LDS swizzle companion was exact at two-block occupancy but
 reached only 38.402 TFLOPS. This layout permutation is also closed; further
 progress needs a new packed producer rather than another swizzle.

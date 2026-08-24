@@ -958,6 +958,12 @@ The corrected K2 path with `WMMA_BP_NO_EXPLICIT_VMWAIT=1` stayed exact but
 reached 44.321 TFLOPS, statistically identical to the 44.289 control. Removing
 the explicit VMEM wait does not recover the K32 handoff cost.
 
+An alternate K32 slice-major host packing (`RECORD_BLOCK_SLICE_MAJOR=1`) was
+also tested with the corrected K2 kernel. It reached 44.424 TFLOPS but failed
+the full reference (normalized error 1.356285863, cosine -0.000246312), so the
+kernel’s address contract is specifically block/K-major. Slice-major packing
+is rejected.
+
 The companion `WMMA_BP_HALF_SWIZZLE=1` layout was also screened on the same
 256x128 packed shape. It passed the complete exactness tuple at unchanged
 two-block occupancy, but reached only 38.402 TFLOPS. Half-word LDS swizzling is
