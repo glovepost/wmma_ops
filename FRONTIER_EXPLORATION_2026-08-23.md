@@ -884,6 +884,7 @@ time:
 | Stream one A fragment at a time | 135 VGPR, no spills | Reject before timing: register pressure increased |
 | M-major WMMA issue order | 142 VGPR, no spills | Reject before timing: register pressure increased |
 | Persistent tile scheduler | 35.821 TFLOPS; exact; one block/eight waves | Reject: the long square GEMM is already compute-saturated |
+| Hot-loop compare elision | GPU page fault before validation | Reject: SCC cannot be carried safely across the refill/WMMA sequence |
 
 The barrier-removal failure is particularly useful: `s_waitcnt` retires a
 wave's own LDS writes but does not publish them to the other waves, so it
