@@ -1009,6 +1009,12 @@ eight-M-wave rebuild restored the 256x128 geometry but hit an unspecified
 launch failure before validation. The alternative tile-ownership architecture
 is closed without a performance result.
 
+The opposite ownership geometry (`warp_tile_m=8`, two M-waves) was then
+tested. With two N-waves it produced a non-finite result despite an invalid
+86.892-TFLOPS timing. Splitting N into four waves (`warp_tile_n=2`) repaired
+exactness at 47.590 TFLOPS and two-block/16-wave occupancy, but remains below
+delta-2. Larger M stripes therefore do not provide a usable 50-TFLOPS path.
+
 ### 2026-08-24 asymmetric LDS padding screen
 
 Complementary A/B stride pairs were tested on the packed 256x128 source

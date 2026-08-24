@@ -3872,6 +3872,11 @@ The source `warp_tile_m=2` ownership variant was also screened. Four M-waves
 derived a 128x128 tile and failed exactness at 23.282 TFLOPS; eight M-waves
 restored 256x128 but failed launch before validation. No candidate is retained.
 
+The opposite `warp_tile_m=8` geometry was also tested. Two N-waves gave a
+non-finite output behind an invalid 86.892-TFLOPS timing; four N-waves repaired
+exactness but reached only 47.590 TFLOPS. The larger M stripe is not a viable
+route to 50 TFLOPS.
+
 Complementary asymmetric A/B padding pairs (4/12, 12/4, 2/14, 14/2, 6/10,
 10/6) all stayed exact but measured only 25.755--27.389 TFLOPS. The stride
 phases cannot be decoupled without upsetting the WMMA/LDS access pattern, so
