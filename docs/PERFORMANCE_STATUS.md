@@ -851,3 +851,11 @@ the 120-VGPR/two-block resource tuple. Its five fresh-process medians were
 48.649, 48.686, 48.775, 48.822, and 48.698 TFLOPS (about 48.726 average),
 below the control band. The operands’ bank phases do not combine into a gain;
 the phase-composition branch is closed.
+
+### 2026-08-24 paired A-LDS issue order
+
+The A LDS transactions within each fragment group were issued in ascending
+bank-offset order while preserving destination registers and all waits. The
+variant stayed exact at the same 120-VGPR/two-block resource tuple, but fresh
+process medians averaged about 48.629 TFLOPS. Request ordering is therefore not
+an independent gain; the original hand schedule remains the control.

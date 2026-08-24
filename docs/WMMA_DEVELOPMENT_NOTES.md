@@ -3768,6 +3768,10 @@ Combining the operand phases was also tested: every A and B LDS access moved by
 processes averaged about 48.726 TFLOPS (48.649--48.822). A/B phase interaction
 does not provide headroom, so the combined phase is not retained.
 
+Finally, paired A LDS requests were reordered by bank offset without changing
+their destinations or waits. The candidate was exact but averaged about
+48.629 TFLOPS across five processes. This issue-order variant is closed.
+
 The complementary 256x192 tile was not a valid benchmark geometry: 192 does
 not divide 4096, and its edge workgroup faulted before validation. No timing is
 recorded; non-divisible tiles require a separate bounds-safe harness.

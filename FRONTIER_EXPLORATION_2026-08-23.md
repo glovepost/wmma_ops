@@ -1146,6 +1146,10 @@ The combined A+16/B+16 LDS phase was exact but measured
 48.649/48.686/48.775/48.822/48.698 TFLOPS (about 48.726 average). It is below
 the control band, so operand phase composition is closed.
 
+The paired A-LDS request order was also screened. It preserved exact output and
+the 120-VGPR resource class but averaged about 48.629 TFLOPS across five
+processes, so LDS request ordering alone is closed.
+
 The complementary 256x192 tile was rejected before timing because the fixed
 4096-wide problem is not divisible by 192. Its edge workgroup faulted on the
 packed/output bounds, so it supplies no kernel performance result.
