@@ -597,6 +597,10 @@ TFLOPS but failed validation (`finite=no`, normalized maximum error
 0.100156495, NaN RMS/cosine). The current wait placement is a real fragment
 dependency boundary and remains unchanged.
 
+Reversing each contiguous independent WMMA run preserved exactness and the
+120-VGPR resource tuple but reached 48.809 TFLOPS. Matrix issue order is not
+a free gain; the original order remains the control.
+
 ## Record protocol
 
 Use this protocol before promoting a result in the README:

@@ -938,6 +938,11 @@ TFLOPS, but failed validation (`finite=no`, normalized maximum error
 0.100156495, NaN RMS/cosine). The current wait placement is a real fragment
 dependency boundary and is retained.
 
+Reversing each contiguous independent WMMA run in the hand-assembled hot loop
+preserved all waits, loads, barriers, resources, and exact output, but reached
+48.809 TFLOPS. Matrix issue order is therefore not a free throughput gain; the
+original compiler-derived order remains the control.
+
 ## Decision
 
 The correct block/K-major p8 kernel with progressive refill, scalar-offset
