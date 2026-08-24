@@ -1070,6 +1070,15 @@ remove the two workgroup handoffs without adding LDS capacity or register
 pressure. Raw profiler output remains on the host at
 `/root/wmma-results/profile-delta2-new/`.
 
+### 2026-08-24 K-loop SCC shortcut
+
+The hand assembly's K-loop decrement was tested as the source of the back-edge
+condition, removing the explicit `s_cmp_eq_u32 s6, 0` before
+`s_cbranch_scc0`. The assembler accepted the image, but the gfx1151 runtime
+rejected it as `invalid device function` during the occupancy query. No
+correctness or timing result exists; the explicit compare remains required by
+the loader/code-object contract.
+
 ### 2026-08-24 hybrid-B ping-pong screen
 
 The complementary one-sided producer was built with B ping-pong and A left in

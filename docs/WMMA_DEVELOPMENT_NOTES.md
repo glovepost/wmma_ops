@@ -3990,6 +3990,12 @@ denominators, but they sharpen the next design target: hide or remove the two
 workgroup handoffs without increasing the 18-KiB LDS footprint or 120-VGPR
 allocation. Raw files are retained at `/root/wmma-results/profile-delta2-new/`.
 
+The next scalar-control probe removed the K-loop `s_cmp_eq_u32 s6, 0`, relying
+on the preceding decrement's SCC for the back-edge branch. Although the image
+assembled, gfx1151 rejected it as `invalid device function` before occupancy
+and validation. The explicit loop compare is retained as a required code-object
+boundary; no throughput result is recorded.
+
 The complementary one-sided B producer was then built with
 `WMMA_BP_HYBRID_B_PINGPONG=1`, leaving A in the active buffer. It stayed exact
 at two blocks/16 waves, but five medians were 45.090, 45.107, 44.805, 44.976,
