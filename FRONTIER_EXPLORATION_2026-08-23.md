@@ -1167,3 +1167,20 @@ B placement is closed.
 The complementary 256x192 tile was rejected before timing because the fixed
 4096-wide problem is not divisible by 192. Its edge workgroup faulted on the
 packed/output bounds, so it supplies no kernel performance result.
+
+### 2026-08-24 publication-counter follow-up
+
+The delta-2 hot loop reaches `vmcnt(0)` immediately before its final refill
+store, so the subsequent combined VMEM/LDS publication wait redundantly tests
+VMEM. Narrowing that instruction to `s_waitcnt lgkmcnt(0)` remained exact and
+won all six alternating-order, 20-warmup/100-iteration pairs. Candidate
+medians averaged **49.143 TFLOPS** (48.964--49.376) versus 49.014 for paired
+controls, a +0.26% uplift at unchanged 120 VGPR, 22 SGPR, 18 KiB LDS, and
+two-block/16-wave occupancy. This supersedes the 49.035 qualified average but
+does not meet the 50-TFLOPS gate.
+
+Moving the overwrite barrier ahead of the final three register-only WMMAs was
+correct but neutral in direct isolation (48.866 versus 48.890 TFLOPS for the
+wait-only image). Relaxing the selected LDS threshold to `lgkmcnt(1)` or `(2)`
+failed the full-output gate. The retained mechanism is therefore the narrow
+counter domain, not early-barrier overlap or incomplete LDS publication.

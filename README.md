@@ -4,7 +4,7 @@ Optimized FP16-input, FP32-accumulation WMMA GEMM kernels for AMD Strix Halo
 (`gfx1151`), exposed as a PyTorch extension and accompanied by standalone HIP
 benchmarks. The ordinary-layout, FP32-output contract has a validated
 4096-cubed peak of **41.322 TFLOPS**; a separate persistent block/K16-prepacked
-FP16-output contract now sustains **49.035 TFLOPS**.
+FP16-output contract now sustains **49.143 TFLOPS**.
 
 The project is a performance laboratory, not a drop-in replacement for
 rocBLAS. Its useful outputs are the gfx1151 fragment helpers, a collection of
@@ -23,14 +23,14 @@ five fresh processes produced a 40.900 TFLOPS median and a 40.772-41.104
 TFLOPS range. The separate prepacked contract is the current sustained
 research leader, but it remains a distinct input-layout contract and is not
 comparable to an ordinary-layout call that includes packing. The open research
-gate is to close its 1.97% gap to 50 TFLOPS with five fresh processes and the
+gate is to close its 1.71% gap to 50 TFLOPS with fresh processes and the
 full numerical check in every process.
 
 | Result | Shape | Numerical contract | Status |
 |---|---|---|---|
 | **41.322 TFLOPS** | 4096 cubed | FP16 inputs, FP32 accumulate/output | Validated standalone peak |
 | **40.900 TFLOPS median** | 4096 cubed | Same | Five fresh processes; strict gate not met |
-| **49.035 TFLOPS average** | 4096 cubed | block/K16-prepacked FP16 inputs/output | Five fresh 100-iteration processes; distinct persistent-input contract |
+| **49.143 TFLOPS average** | 4096 cubed | block/K16-prepacked FP16 inputs/output | Six alternating-order candidate/control pairs, 100 iterations per timing block; distinct persistent-input contract |
 | **46.082 TFLOPS median** | 4096 cubed | FP16 inputs/output | Upstream `bench_half_half`; separate numerical contract |
 | **85.907 INT4 TOPS** | 4096 cubed | prepacked linear W4A4, INT32 output | Exact full-output validation; separate numerical contract |
 | **94.044 INT4 TOPS average** | 4096 cubed | four-slice paired-K prepacked linear W4A4, INT32 output | Five fresh candidate/control pairs; exact; separate numerical contract |
@@ -48,16 +48,17 @@ This does not replace the project record: the output type differs, and the
 upstream suite does not validate every output at the exact 4096-cubed benchmark
 shape. See the performance ledger for the full command and timing distribution.
 
-The separate block/K16-prepacked experiment now averages **49.035 TFLOPS**
-across five fresh 100-iteration processes (48.980--49.116 TFLOPS, 2.802906 ms
-mean median time) and reproduces the full 16,777,216-element rocBLAS error
-tuple in every process. It combines progressive refill commit, scalar-offset
-MUBUF addressing, and a measured two-VGPR register-phase shift. It assumes
+The separate block/K16-prepacked experiment now averages **49.143 TFLOPS**
+across six alternating-order candidate/control pairs (48.964--49.376 TFLOPS,
+2.796758 ms mean median time) and reproduces the full 16,777,216-element
+rocBLAS error tuple in every process. The paired delta-2 controls averaged
+49.014 TFLOPS. The selected image combines progressive refill commit,
+scalar-offset MUBUF addressing, a measured two-VGPR register-phase shift, and
+an LDS-only publication wait after VMEM has already retired. It assumes
 persistent, block-packed A and B inputs, so it is not comparable to the
 ordinary-layout FP32 record or to a call that includes packing. The previous
-sustained leader was 48.614 TFLOPS, and the best isolated short sample remains
-49.573 TFLOPS; isolated 50+ samples failed sustained same-pass checks and are
-not promoted.
+sustained leader was 49.035 TFLOPS; isolated higher samples failed sustained
+same-pass checks and are not promoted.
 
 The clock-derived nominal ceiling is 59.4 TFLOPS: 20 WGPs x 1024
 FLOP/WGP/cycle x 2.9 GHz. It is not a measured sustained ceiling.

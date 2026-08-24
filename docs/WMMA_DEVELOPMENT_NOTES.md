@@ -3100,7 +3100,7 @@ different numerical and input-layout contracts and must not be conflated.
 | Repository FP16 input / FP32 accumulation and output | 41.322 TFLOPS peak | Full rocBLAS-reference validation; five-process median 40.900 TFLOPS, so the sustained promotion gate remains open |
 | Upstream FP16 input / FP16 output control | 46.082 TFLOPS median | Reproduced from three fresh processes; external comparison, not the repository record |
 | Original-layout FP16-output control in the block-pack campaign | 45.697 TFLOPS | Same-pass screening control |
-| Persistent block/K-major FP16-output inputs | **49.035 TFLOPS average** | Five fresh 100-iteration processes; current sustained leader for the separate prepacked-input contract |
+| Persistent block/K-major FP16-output inputs | **49.143 TFLOPS average** | Six alternating-order 100-iteration candidate/control pairs; current sustained leader for the separate prepacked-input contract |
 | Best short persistent block/K-major pass | 49.573 TFLOPS | Below the 50 TFLOPS gate and not sustained |
 
 The retained persistent-input leader is a 256x128 N-packed, padding-8 kernel.
@@ -4176,3 +4176,45 @@ These screens narrow the remaining architecture requirement: preserve CU-local
 data sharing and change useful work across the publication boundaries. Neither
 instruction-fetch cosmetics nor wider WGP distribution hides the measured
 barrier cost.
+
+### 2026-08-24: read-complete barrier and publication-counter isolation
+
+The single-buffer overwrite barrier can legally move after the final
+`lgkmcnt(0)` and before the last three WMMAs: every old LDS read is complete,
+the remaining WMMAs consume only VGPR operands, and their A/B registers are
+disjoint from refill destinations v76:v83 and v116:v119. Three hand schedules
+placed A0/A1/B stores before or between those WMMAs. Every image retained the
+120-VGPR/22-SGPR/18-KiB resource tuple and reproduced normalized maximum error
+`0.018779343`, RMS `0.035428338`, and cosine `0.999977929`.
+
+The initial 10/10 screen reached 49.194 TFLOPS for WMMA-first interleave,
+49.560 for store-first interleave, and 49.544 for all stores before the final
+WMMAs, bracketed by 49.588/49.465 controls. Narrowing the final combined wait
+to LDS-only made the stores-first form look positive, so it received two
+five-pair order-swapped qualifications. Across those ten candidate processes
+it averaged 49.196 TFLOPS versus 49.039 for controls.
+
+The mechanism was then isolated rather than attributed to the new architecture.
+Six alternating-order pairs compared early-barrier/stores-first directly with
+an otherwise original delta-2 image carrying the same LDS-only publication
+wait. They averaged 48.866 and 48.890 TFLOPS respectively. The moved barrier
+and WMMAs are neutral; the wait encoding is the gain.
+
+The original schedule with only
+`s_waitcnt vmcnt(0) lgkmcnt(0)` changed to `s_waitcnt lgkmcnt(0)` won all six
+alternating-order pairs against delta-2. Candidate medians were
+49.375945/49.306595/49.148937/49.028723/49.032456/48.963617 TFLOPS (49.142712
+average); controls were
+49.307274/49.065154/49.009545/48.833495/48.918430/48.950491 (49.014065
+average). The +0.128647-TFLOPS mean uplift is +0.26%, and all twelve processes
+passed the full-output tuple. The selected image remains 120 VGPR, 22 SGPR,
+18,432 bytes LDS, and two blocks/16 waves.
+
+`lgkmcnt(0)` remains load-bearing. Relaxing it to one or two outstanding LDS
+operations failed the numerical gate with normalized maximum errors
+0.069077660 and 0.073682838. Removing the wait entirely was exact in the
+earlier screen but did not preserve the measured uplift. Retain only the
+LDS-only `lgkmcnt(0)` form as the new 49.143-TFLOPS research base. The raw log
+is `/root/wmma-results/early-barrier-lgkm-20260824.txt` on the GPU host
+(SHA-256
+`fb90cec6d232d17fcc0fe933160f4684bf81e0617a3bc433683c5069353b4cfa`).

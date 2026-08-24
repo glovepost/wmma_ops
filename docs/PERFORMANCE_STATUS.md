@@ -16,7 +16,7 @@ It uses the pinned standalone harness in `tools/`, deterministic random inputs,
 and a full rocBLAS FP32 reference over all 16,777,216 outputs. Its five-process
 ordinary-layout audit had a 40.900 TFLOPS median and a 40.772-41.104 range. The
 separate block/K16-prepacked FP16-output contract is the current sustained
-research leader at 49.035 TFLOPS; it has its own 50-TFLOPS promotion gate.
+research leader at 49.143 TFLOPS; it has its own 50-TFLOPS promotion gate.
 
 The previous documented record was **21.6 TFLOPS**. It came from the historical
 ROCm 7.9/7.10-preview environment and used three warm-ups and 20 timed
@@ -273,15 +273,16 @@ This result demonstrates that a full data-moving IU4 kernel can exceed the
 50-operations/s target, but it remains a distinct integer contract.  It is not
 eligible for the FP16 TFLOPS table or record gate.
 
-The current FP16-output, block/K16-prepacked research leader averages **49.035
-TFLOPS** at 4096 cubed across five fresh 100-iteration processes. Their medians
-are 49.095/48.980/48.995/48.986/49.116 TFLOPS, with a 48.980-TFLOPS floor and
-2.802906-ms average median time. It uses a 256x128 block, eight waves, p8 A/B
-LDS rows, 120 VGPR, 22 SGPR, 18 KiB LDS, and no spills. The result passed a
-full rocBLAS reference check in every process, but it is a persistent-input
-contract: packing is outside the timed region. The previous sustained leader
-was 48.614 TFLOPS. A 49.573-TFLOPS short sample and two isolated 50+ samples
-remain non-promotable; the sustained 50-TFLOPS FP16 gate is still open.
+The current FP16-output, block/K16-prepacked research leader averages **49.143
+TFLOPS** at 4096 cubed across six alternating-order candidate/control pairs.
+Its medians are 49.376/49.307/49.149/49.029/49.032/48.964 TFLOPS, with a
+48.964-TFLOPS floor and 2.796758-ms average median time. Paired delta-2 controls
+average 49.014 TFLOPS. It uses a 256x128 block, eight waves, p8 A/B LDS rows,
+120 VGPR, 22 SGPR, 18 KiB LDS, and no spills. The result passed a full rocBLAS
+reference check in every process, but it is a persistent-input contract:
+packing is outside the timed region. The previous qualified leader averaged
+49.035 TFLOPS. Isolated higher samples remain non-promotable; the sustained
+50-TFLOPS FP16 gate is still open.
 
 A fresh five-process recheck after the shared-box load-settle experiment
 measured **48.939/48.912/48.847/48.633/48.504 TFLOPS** (48.767 average,
@@ -526,11 +527,11 @@ descriptions of the current data path.
 ## Current plan to sustain more than 50 TFLOPS
 
 The ordinary-layout peak has been crossed and the prepacked contract is within
-1.97% of the target. The remaining work is to make a 50-TFLOPS crossing durable
+1.71% of the target. The remaining work is to make a 50-TFLOPS crossing durable
 without weakening either numerical contract.
 
-1. **Close the prepacked sustained gap.** The current five-process floor is
-   48.980 TFLOPS and the average is 49.035; optimize against the worst and
+1. **Close the prepacked sustained gap.** The current six-process floor is
+   48.964 TFLOPS and the average is 49.143; optimize against the worst and
    median fresh process, not the best short block.
 2. **Attack the measured synchronization cost.** The one-buffer K32 path uses
    two workgroup barriers per step. Explore a split signal/wait schedule or a
@@ -1373,3 +1374,36 @@ more synchronization/data-sharing cost than its extra residency repays. The
 49.035-TFLOPS qualified leader therefore remains in CU mode.
 `build-wgp-mode.sh` and `tools/set_workgroup_mode_asm.py` preserve this
 negative result as a reproducible placement experiment.
+
+### 2026-08-24 LDS-only publication wait qualification
+
+The repeated delta-2 handoff already retires all three refill VMEM operations
+at `vmcnt(2)`, `vmcnt(1)`, and `vmcnt(0)` before the final B LDS store. Its
+following combined `s_waitcnt vmcnt(0) lgkmcnt(0)` therefore re-tests a VMEM
+counter known to be empty. `tools/patch_publish_wait_asm.py` narrows only this
+hot-loop instruction to `s_waitcnt lgkmcnt(0)`; the prologue, addresses,
+WMMAs, stores, barriers, register allocation, and metadata remain unchanged.
+
+Six 20-warmup/100-iteration pairs alternated candidate/control order. The
+candidate medians were **49.376, 49.307, 49.149, 49.029, 49.032, and 48.964
+TFLOPS** (49.143 average, 48.964 floor), while paired delta-2 controls were
+49.307, 49.065, 49.010, 48.833, 48.918, and 48.950 TFLOPS (49.014 average).
+The candidate won all six pairs by 0.129 TFLOPS on average (+0.26%), retained
+120 VGPR/22 SGPR/18 KiB LDS and two blocks/16 waves, and reproduced the exact
+reference tuple in every process. It supersedes the 49.035-TFLOPS qualified
+average as the block/K16-prepacked FP16 research leader, but no process crossed
+the 50-TFLOPS promotion threshold. Raw process output is retained on the GPU
+host at `/root/wmma-results/early-barrier-lgkm-20260824.txt`.
+Its SHA-256 is
+`fb90cec6d232d17fcc0fe933160f4684bf81e0617a3bc433683c5069353b4cfa`.
+
+The counter boundary is strict. Allowing one or two LDS operations to remain
+outstanding produced normalized maximum errors 0.069077660 and 0.073682838,
+respectively, above the 0.03 gate; those timings are invalid. A separate
+CU-local architecture moved the overwrite barrier before the final three
+register-resident WMMAs and issued the refill stores before or between them.
+All loadable forms were exact, but a six-pair order-balanced isolation measured
+48.866 TFLOPS for the best early-barrier form versus 48.890 for the equivalent
+LDS-only-wait image. Moving the WMMAs contributes no independent gain and is
+retained only as negative architecture evidence. `build-publish-wait.sh` and
+`build-early-read-barrier.sh` reproduce both families.
