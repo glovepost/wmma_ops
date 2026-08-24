@@ -859,6 +859,39 @@ The best combined average remained below the control midpoint. These are
 order/noise effects rather than additive gains; the unpermuted delta-2 form
 remains the leader.
 
+## Counter-guided follow-up — 2026-08-24
+
+The retained delta-2 leader was profiled with ROCm 7.14 rocprofiler-compute
+using a separate counter pass; counter-pass durations are not throughput
+denominators. The exact leader dispatch remained 120 VGPR, 22 SGPR, and 18 KiB
+LDS with two resident blocks. Its two counter passes reported 47.747 and
+47.588 TFLOPS under profiling perturbation; both exactness tuples were unchanged
+(`normalized_max_error=0.018779343`, `cosine_similarity=0.999977929`). The
+first pass reported `SQ_WAIT_BARRIER=1.212e9`, `SQ_WAIT_CNT_ANY=6.537e8`, and
+`SQ_WAIT_INST_LDS=3.879e8`, while `GRBM_GUI_ACTIVE` remained close to the
+dispatch interval. This points to synchronization and operand retirement as
+the useful frontier, not a missing DRAM transfer.
+
+The following architecture-level tests were then run or rejected at compile
+time:
+
+| Candidate | Result | Decision |
+|---|---:|---|
+| K32 two-slot persistent ring | 39.561 TFLOPS; exact | Reject: the larger K32 schedule loses to K16 |
+| Source `WAIT_AFTER_BARRIER` | 47.140 TFLOPS; exact | Reject: no improvement over source control |
+| Source `NO_EXPLICIT_VMWAIT` | 47.094 TFLOPS; exact | Reject: no improvement over source control |
+| Remove publish barrier | 47.360 TFLOPS; normalized error 0.562 | Reject: synchronization is required |
+| Stream one A fragment at a time | 135 VGPR, no spills | Reject before timing: register pressure increased |
+| M-major WMMA issue order | 142 VGPR, no spills | Reject before timing: register pressure increased |
+
+The barrier-removal failure is particularly useful: `s_waitcnt` retires a
+wave's own LDS writes but does not publish them to the other waves, so it
+cannot replace the second workgroup barrier. The source-level register tests
+also confirm that apparent A-fragment hoisting is not the sole cause of the
+120-VGPR allocation; restructuring the loops extends other fragment and
+prefetch live ranges. The delta-2 assembly leader therefore remains the control
+for the next hand-scheduled register/WMMA experiment.
+
 ## Decision
 
 The correct block/K-major p8 kernel with progressive refill, scalar-offset
