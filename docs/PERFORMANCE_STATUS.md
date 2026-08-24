@@ -1057,6 +1057,19 @@ blocks/16 waves, but medians were **47.749, 47.805, 47.555, 47.730, and
 are therefore correct but slower than the hand-scheduled delta-2 leader and
 are closed as an independent path.
 
+### 2026-08-24 fresh delta-2 counter pass
+
+A separate ROCm Compute Profiler pass on the retained `bp-register-phase-d2`
+image collected barrier/LDS counters without using serialized counter timing
+as a throughput denominator. `SQ_BUSY_CYCLES_avr / GRBM_GUI_ACTIVE` was
+0.9904, confirming that the kernel is shader-active rather than DRAM-latency
+bound. Normalized to `SQ_WAVE_CYCLES_sum`, the counters reported approximately
+**17.2% `SQ_WAIT_BARRIER`, 5.7% `SQ_WAIT_INST_LDS`, and 8.6%
+`SQ_WAIT_CNT_ANY`**. The next architecture target is therefore to hide or
+remove the two workgroup handoffs without adding LDS capacity or register
+pressure. Raw profiler output remains on the host at
+`/root/wmma-results/profile-delta2-new/`.
+
 ### 2026-08-24 hybrid-B ping-pong screen
 
 The complementary one-sided producer was built with B ping-pong and A left in

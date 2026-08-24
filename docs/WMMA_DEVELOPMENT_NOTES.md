@@ -3982,6 +3982,14 @@ floor). The source full-tile epilogue is safe but slower than the
 hand-scheduled delta-2 leader, so it is closed as a standalone performance
 route.
 
+A fresh ROCm Compute Profiler pass then measured the retained delta-2 image in
+separate counter passes. `SQ_BUSY_CYCLES_avr / GRBM_GUI_ACTIVE` was 0.9904;
+normalized wave-cycle counters were approximately 17.2% barrier wait, 5.7%
+LDS-instruction wait, and 8.6% counter wait. These counters are not timing
+denominators, but they sharpen the next design target: hide or remove the two
+workgroup handoffs without increasing the 18-KiB LDS footprint or 120-VGPR
+allocation. Raw files are retained at `/root/wmma-results/profile-delta2-new/`.
+
 The complementary one-sided B producer was then built with
 `WMMA_BP_HYBRID_B_PINGPONG=1`, leaving A in the active buffer. It stayed exact
 at two blocks/16 waves, but five medians were 45.090, 45.107, 44.805, 44.976,
