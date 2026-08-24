@@ -4028,3 +4028,13 @@ The complementary one-sided B producer was then built with
 at two blocks/16 waves, but five medians were 45.090, 45.107, 44.805, 44.976,
 and 44.742 TFLOPS (44.944 average, 44.742 floor). B-side ping-pong does not
 recover the hand-scheduled leader's gap and is closed as an independent path.
+
+The counter-guided follow-up then relaxed one `lgkmcnt` threshold at a time in
+the hand-scheduled delta-2 loop. Lowering 6→5, 4→3, or 2→1 was bit-exact and
+gave attractive short 10/10 timings of 49.930, 49.807, and 49.858 TFLOPS.
+Long interleaved fresh-process tests did not sustain a promotion: the 2→1
+candidate averaged 48.807 versus 48.565 for controls, and the 6→5 candidate
+averaged 48.952 versus 48.893. Applying all three relaxations together fell
+to 49.597 in the short screen. The original 6/4/2 dependency ladder remains
+the safe schedule; these isolated wait edits are closed as noise-sensitive
+rather than a new architecture.

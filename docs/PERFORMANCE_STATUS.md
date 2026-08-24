@@ -1219,3 +1219,19 @@ passed the exactness tuple and retained two-block occupancy, but the
 20-warmup/20-iteration screens reached only 25.755--27.389 TFLOPS. The
 operand stride phases are coupled by the WMMA/LDS access pattern; asymmetric
 padding is closed as a route to the leader.
+
+### 2026-08-24 LDS wait-threshold screen
+
+The counter pass suggested that the first WMMA pair might not need to wait for
+all ten outstanding LDS returns. Hand-patched copies of the delta-2 image
+lowered one dependency threshold at a time, with the same registers, addresses,
+barriers, and input contract. Lowering the first `lgkmcnt(6)` to 5 remained
+exact, as did lowering the second 4 to 3 or the third 2 to 1. Short 10/10
+screens reached 49.930, 49.807, and 49.858 TFLOPS respectively, but all
+five-process/longer interleaved tests stayed below the promotion gate. The
+best single-step candidate (third threshold 2 to 1) averaged 48.807 TFLOPS
+versus 48.565 for its interleaved controls; the first-threshold candidate
+averaged 48.952 versus 48.893 for controls. The apparent gains are therefore
+within package noise, while the combined 4/3/1 ladder fell to 49.597 in the
+short screen. Retain the original 6/4/2 ladder; wait-threshold relaxation is
+closed as a standalone route to 50 TFLOPS.
