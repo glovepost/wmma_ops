@@ -1015,6 +1015,12 @@ tested. With two N-waves it produced a non-finite result despite an invalid
 exactness at 47.590 TFLOPS and two-block/16-wave occupancy, but remains below
 delta-2. Larger M stripes therefore do not provide a usable 50-TFLOPS path.
 
+The source arrays were then resized (`c_n` and every packed-path `a_frag`)
+to match `warp_tile_m=8`, eliminating the known four-entry out-of-bounds bug.
+The repaired image still returned non-finite output behind an invalid 87.047
+TFLOPS timing at three-block/12-wave occupancy. The failure is deeper than
+array sizing (fragment/epilogue assumptions), so large-M ownership is closed.
+
 ### 2026-08-24 asymmetric LDS padding screen
 
 Complementary A/B stride pairs were tested on the packed 256x128 source

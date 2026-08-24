@@ -3877,6 +3877,11 @@ non-finite output behind an invalid 86.892-TFLOPS timing; four N-waves repaired
 exactness but reached only 47.590 TFLOPS. The larger M stripe is not a viable
 route to 50 TFLOPS.
 
+Resizing the source `c_n` and packed-path `a_frag` arrays for eight M-fragments
+removed the obvious out-of-bounds state, but the image still produced
+non-finite output behind an invalid 87.047-TFLOPS timing. The remaining
+fragment/epilogue assumptions make this ownership geometry unsuitable.
+
 Complementary asymmetric A/B padding pairs (4/12, 12/4, 2/14, 14/2, 6/10,
 10/6) all stayed exact but measured only 25.755--27.389 TFLOPS. The stride
 phases cannot be decoupled without upsetting the WMMA/LDS access pattern, so
