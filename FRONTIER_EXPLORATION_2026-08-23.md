@@ -950,6 +950,13 @@ invalid (normalized maximum error 208.326). The `bp-bphase-asm16` and
 `bp-bphase-asm32` objects failed occupancy with invalid device functions
 before timing. None is a candidate for the prepacked leader.
 
+The prefetch-permutation backlog was also screened. `bp-pf-013`, `021`,
+`023`, `032`, and `123` measured 47.649, 47.587, 47.531, 47.473, and
+47.308 TFLOPS respectively, all exact. The lower-occupancy `bp-prefetch-012`,
+`021`, `102`, and `120` forms measured 37.032, 37.227, 37.313, and 38.031
+TFLOPS exact with three resident blocks. These permutations are closed and do
+not advance the delta-2 control.
+
 ## Decision
 
 The correct block/K-major p8 kernel with progressive refill, scalar-offset

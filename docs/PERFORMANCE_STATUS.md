@@ -607,6 +607,11 @@ failed correctness with normalized error 208.326. Two B-phase assembly objects
 failed occupancy with invalid device functions before timing. None advances the
 prepacked leader.
 
+The prefetch-permutation backlog was screened as well: `bp-pf-*` forms ranged
+from 47.308 to 47.649 TFLOPS, while the lower-occupancy `bp-prefetch-*` forms
+reached 37.032–38.031 TFLOPS with three resident blocks. All valid outputs
+were exact; none advances the delta-2 control.
+
 ## Record protocol
 
 Use this protocol before promoting a result in the README:
