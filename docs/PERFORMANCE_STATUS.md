@@ -1331,6 +1331,15 @@ block) remained exact at 4096 cubed but reached only **92.056 INT4 TOPS** in a
 10-warmup/10-timing screen. The extra resident state does not repay its LDS
 traffic and occupancy pressure; four slices remain the selected IU4 depth.
 
+### 2026-08-24 later-LGKM wait removal screen
+
+Each of the four later `s_waitcnt lgkmcnt(0)` points in the delta-2 hand loop
+was removed independently, leaving all addresses, WMMAs, barriers, and other
+waits unchanged. Every assembled image was rejected by gfx1151 as
+`invalid device function` during the occupancy query, before correctness or
+timing. These waits are therefore code-object/synchronization boundaries, not
+safe overlap opportunities; the delta-2 wait schedule is retained.
+
 The paired-K ring was then generalized from two to four resident K16 slices
 (`-DIU4_PAIR_K=2`), using eight rotating LDS slots and one publication per
 four slices. A second fresh five-process bracket (10 warmups/10 timings per

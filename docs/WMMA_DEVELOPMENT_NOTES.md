@@ -4124,3 +4124,8 @@ An eight-slice extension (`-DIU4_PAIR_K=4`) was also exact, but reached only
 92.056 INT4 TOPS at 4096 cubed. Its 32 KiB LDS footprint and larger staging
 arrays erase the four-slice gain, so the ring-depth screen closes at four
 slices; unsupported non-dividing depths are guarded by a compile-time check.
+
+Removing each of the four later `lgkmcnt(0)` waits from the FP16 delta-2 hand
+loop independently produced an image that gfx1151 rejected as `invalid device
+function` at the occupancy query. No invalid image was timed or promoted; the
+waits remain part of the required hand schedule.
