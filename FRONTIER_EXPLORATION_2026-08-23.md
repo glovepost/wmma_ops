@@ -1120,3 +1120,8 @@ distinct persistent-input contract and has not met the 50 TFLOPS promotion
 gate. The research kernels and negative results are kept for reproducibility.
 Continue from the measured delta-2 register phase; do not promote isolated 50+
 samples that fail the sustained same-pass control.
+
+The repaired 256x64 geometry used four waves per block and four resident blocks
+per CU. Its four-vector-per-thread A loader produced exact output at 42.962
+TFLOPS, but duplicated A traffic dominates the smaller LDS footprint. The
+half-width tile is closed.

@@ -803,3 +803,11 @@ preserved the full exactness tuple. On 128x256 it measured 45.897 TFLOPS versus
 The latter difference is within screening noise and neither geometry approaches
 the 49.035-TFLOPS delta-2 leader. The temporary header and binaries were
 removed after the run. Raw-buffer prefetch is closed as a standalone route.
+
+### 2026-08-24 256x64 fragment geometry
+
+An explicitly repaired 256x64 block was tested as a four-wave block with four
+resident blocks per CU. The loader covered four A vectors per thread and one B
+vector per thread, preserving the full exactness tuple. It reached 42.962
+TFLOPS. The extra A traffic from splitting the N tile dominates the residency
+benefit, so the half-width geometry is closed.

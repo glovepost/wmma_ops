@@ -3738,3 +3738,10 @@ A follow-up composition sweep shifted the B LDS base of delta-2 by +4, +8, and
 bank-phase penalty and the 16-byte shift remains slower than delta-2. Register
 phase and LDS phase must therefore be optimized jointly rather than composed
 from separately favorable screens.
+
+## 2026-08-24: 256x64 fragment geometry
+
+A new 256x64 block geometry was implemented with an explicit four-vector A
+loader and four resident blocks per CU. After fixing the 32-lane wave mapping,
+it passed exact validation at 42.962 TFLOPS. Splitting N in half duplicates A
+traffic enough to erase the occupancy benefit, so this geometry is closed.
