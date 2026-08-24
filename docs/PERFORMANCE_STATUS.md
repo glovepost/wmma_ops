@@ -1254,3 +1254,9 @@ exactness tuple at two blocks/16 waves. Short screens reached 49.410 and
 49.439 TFLOPS respectively, but three fresh interleaved pairs for swizzle 32
 averaged 48.771 TFLOPS versus 48.994 for delta-2 controls. The alternate bank
 phases regress under sustained timing; swizzle 16 remains required.
+The zero-padding source layout was also rebuilt as a control for the hand
+schedule. The register-phase patch could not be applied because its descriptor
+pattern is specific to the p8 address schedule; the loadable source image
+passed exactness at two blocks/16 waves but reached only **45.272 TFLOPS** in
+a 10/10 screen. Zero padding is not a route to 50 and is not mixed with the
+hand-scheduled p8 record.

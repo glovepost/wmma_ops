@@ -4052,3 +4052,8 @@ variants were exact at unchanged 120-VGPR/two-block occupancy and produced
 interleaved comparison (48.771 average versus 48.994 for delta-2 controls),
 so alternate bank phases are closed and the default swizzle 16 remains the
 research base.
+Zero A/B LDS padding was then compiled as a source control. The hand patcher
+correctly refused to apply its p8-specific descriptor rewrite, so no invalid
+hand image was timed. The source kernel itself was exact at two-block/16-wave
+occupancy but reached 45.272 TFLOPS in a 10/10 screen, closing zero padding
+without weakening the p8 contract.
