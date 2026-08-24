@@ -664,6 +664,41 @@ over the same-pass controls while preserving exactness and resources. This is
 the new research base, but not a promoted result: the pass ran below the
 historical 48.614-TFLOPS sustained leader and no sample reached 50 TFLOPS.
 
+### One-fragment B lookahead and register placement
+
+The combined base still loads each of the last three B fragments immediately
+before its four WMMAs and waits for both 128-bit LDS reads. A hand transform
+introduced one alternate eight-VGPR B bank, preloaded B1 with the initial A/B
+cluster, then loaded B2 while consuming B1 and B3 while consuming B2. The
+instruction count and LDS layout are unchanged; the intended difference is
+that each future B load overlaps four current WMMAs.
+
+The first transform failed validation because only the first WMMA after the
+interleaved global refill was redirected to B3; the remaining three still read
+B2. Its deterministic cosine 0.813 output and 45-TFLOPS timing are invalid,
+not performance evidence. Redirecting all four consumers restored the full
+rocBLAS tuple. This failure is retained because it demonstrates that a WMMA
+fragment remains live across the interleaved refill instructions, not merely
+up to the first matrix instruction.
+
+Four exact placements then swept the alternate B base while preserving the
+schedule:
+
+| Alternate B base | VGPR | Reported occupancy | TFLOPS |
+|---:|---:|---:|---:|
+| 118 | 126 | 3 blocks / 24 waves | 45.419 |
+| 120 | 128 | 3 blocks / 24 waves | 45.999 |
+| 122 | 130 | 2 blocks / 16 waves | 45.203 |
+| 124 | 132 | 2 blocks / 16 waves | 45.929 |
+
+Opening and closing combined-base controls reached 48.352/48.276 TFLOPS.
+Changing the register phase moves throughput by 1.3% within the 24-wave class
+and 1.6% within the 16-wave class, confirming register assignment as a real
+gfx1151 tuning dimension. It cannot rescue this dataflow: the best placement
+is still 4.8% below the control. The deeper initial LDS queue and alternate
+WMMA operand bank cost more than the three hidden wait gaps save, and additional
+reported residency again fails to predict throughput.
+
 ## Decision
 
 The correct block/K-major p8 kernel materially exceeds the original-layout

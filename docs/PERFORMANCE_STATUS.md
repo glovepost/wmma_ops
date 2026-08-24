@@ -350,6 +350,15 @@ the controls: +0.75% and +0.87%, respectively. The combined schedule becomes
 the next research base, but the absolute pass remained below the historical
 48.614-TFLOPS leader and the sustained 50-TFLOPS gate remains open.
 
+A one-fragment B lookahead is also closed. It pipelines each future B LDS load
+across the current four-WMMA group at 126--132 VGPR. All corrected placements
+were exact, but reached only 45.203--45.999 TFLOPS against 48.352/48.276
+combined-base controls. Alternate B base placement changed throughput by
+1.3--1.6% within equal reported-occupancy classes, proving register assignment
+matters, but the best form still lost 4.8%. The 126/128-VGPR forms reported
+three blocks/24 waves; those extra waves did not repay deeper LDS queuing and
+the alternate WMMA operand bank.
+
 At 256 GB/s, the corresponding compute-to-memory ridge point is about
 232 FLOP/byte (`59.4e12 / 256e9`), not 106 FLOP/byte. Both inputs should be
 replaced by observed clocks and sustained bandwidth when making a measured

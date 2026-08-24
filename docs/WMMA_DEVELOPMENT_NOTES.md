@@ -3453,3 +3453,40 @@ in that pass. All nine runs reproduced the full rocBLAS tuple. This establishes
 additivity and makes the combined schedule the next research base, but it does
 not replace the 48.614-TFLOPS sustained record: the package state was lower and
 no sample reached the 50-TFLOPS promotion gate.
+
+### 2026-08-23: One-fragment B lookahead
+
+The next transform copied the compiler's pipelined final-tile pattern into the
+steady loop. An alternate eight-VGPR bank holds B1 while B0 is consumed; the
+ordinary B bank receives B2 while B1 is consumed; then the alternate bank
+receives B3 while B2 is consumed. Each pair of `ds_load_b128` operations is
+therefore separated from its consumer by four WMMAs rather than an immediate
+full wait.
+
+The initial assembly failed the reference gate with normalized maximum error
+1.291 and cosine similarity 0.813. The dependency proof was not the bug: the
+transform redirected the first B3 WMMA before the interleaved global refill,
+but left the three following WMMAs reading B2. After all four consumers were
+redirected, every placement reproduced the full reference tuple. Do not quote
+the failed binary's throughput; its only result is the fragment-liveness rule.
+
+The corrected register-base sweep was:
+
+| Alternate B base | VGPR | Reported occupancy | TFLOPS |
+|---:|---:|---:|---:|
+| 118 | 126 | 3 blocks / 24 waves | 45.419 |
+| 120 | 128 | 3 blocks / 24 waves | 45.999 |
+| 122 | 130 | 2 blocks / 16 waves | 45.203 |
+| 124 | 132 | 2 blocks / 16 waves | 45.929 |
+
+The combined-base controls reached 48.352 and 48.276 TFLOPS. Register placement
+is visibly load-bearing: v120 beats v118 by 1.28% at the same reported 24 waves,
+and v124 beats v122 by 1.61% at the same 16 waves. That is direct gfx1151
+evidence for the register-assignment optimization suggested by VeriLocc.
+
+It does not make B lookahead viable. The best placement remains 4.8% behind
+the control, while v118/v120 demonstrate that 24 reported waves can be slower
+than the 16-wave base. Front-loading two more LDS operations and reading WMMA
+operands from an alternate register bank cost more than overlapping the three
+load/wait gaps saves. Retain the placement sweep as an optimization method;
+close this one-fragment lookahead dataflow.

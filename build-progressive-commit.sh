@@ -20,9 +20,21 @@ python3 tools/patch_buffer_prefetch_asm.py \
     traces/bp-progressive-soffset-stage.s --scalar-offset
 python3 tools/patch_progressive_commit_asm.py \
     traces/bp-progressive-soffset-stage.s traces/bp-progressive-soffset.s
+for base in 118 120 122 124; do
+    python3 tools/patch_b_lookahead_asm.py \
+        traces/bp-progressive-soffset.s \
+        "traces/bp-progressive-soffset-blookahead-v${base}.s" \
+        "--base=${base}"
+done
 
 llvm=/opt/rocm/llvm/bin
-for candidate in bp-progressive-commit bp-progressive-soffset; do
+for candidate in \
+    bp-progressive-commit \
+    bp-progressive-soffset \
+    bp-progressive-soffset-blookahead-v118 \
+    bp-progressive-soffset-blookahead-v120 \
+    bp-progressive-soffset-blookahead-v122 \
+    bp-progressive-soffset-blookahead-v124; do
     "${llvm}/clang" -target amdgcn-amd-amdhsa -mcpu=gfx1151 \
         -mcode-object-version=6 -c "traces/${candidate}.s" \
         -o "traces/${candidate}.o"
