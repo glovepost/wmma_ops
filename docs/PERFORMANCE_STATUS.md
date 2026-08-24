@@ -971,6 +971,12 @@ Adding an explicit `vmcnt(0)` before the high-register copy did not repair the
 same mismatch (49.274 TFLOPS). The failure is therefore not merely a copy
 ordering hazard; the high-register early-B image is closed.
 
+The early-B artifact was regenerated cleanly after finding that an intermediate
+rewrite had accidentally removed the relocated load. The corrected image did
+contain one `buffer_load_b128 v[120:123]`, declared 128 VGPR, and still failed
+the exactness gate at 49.886 TFLOPS. This confirms the producer is not rescued
+by the earlier script correction; no timing from this family is promotable.
+
 ### 2026-08-24 asymmetric LDS padding screen
 
 Complementary A/B stride pairs were tested on the packed 256x128 source

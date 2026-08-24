@@ -3847,6 +3847,11 @@ completion and copy-back still failed exactness at 49.575 TFLOPS. The apparent
 50+ result is therefore rejected; the live-range/register contract must be
 redesigned before this producer idea can be revisited.
 
+After auditing the transformation script, the early-B image was regenerated
+with the relocated load verified present, 128-VGPR metadata, and the intended
+copy/wait sequence. It still failed exactness at 49.886 TFLOPS, confirming that
+the producer idea itself—not just the first script artifact—is invalid.
+
 Complementary asymmetric A/B padding pairs (4/12, 12/4, 2/14, 14/2, 6/10,
 10/6) all stayed exact but measured only 25.755--27.389 TFLOPS. The stride
 phases cannot be decoupled without upsetting the WMMA/LDS access pattern, so
