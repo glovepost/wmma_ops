@@ -871,3 +871,9 @@ register placement alone is closed.
 The complementary A2/A3 register-group permutation was also exact at unchanged
 resources, but five medians averaged about 48.752 TFLOPS. Together with the
 A0/A1 result, this closes A-fragment register permutation as a standalone path.
+
+The final K-tile B0/B1 register groups were then swapped consistently through
+their LDS loads and WMMA operands. The exact candidate retained 120 VGPR and
+two-block occupancy, but five medians averaged about 48.711 TFLOPS. The
+49.585-TFLOPS short sample was package noise; final-tile B placement alone is
+closed.

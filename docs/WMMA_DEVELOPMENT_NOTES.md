@@ -3780,6 +3780,10 @@ alone is not a route to 50.
 The complementary A2/A3 group swap was exact but averaged about 48.752 TFLOPS
 across five processes. Both A-fragment pairings are now closed.
 
+The final tile’s B0/B1 register groups were also exchanged with all matching
+loads and WMMA uses. It remained exact but averaged about 48.711 TFLOPS across
+five processes, so final-tile B placement is closed.
+
 The complementary 256x192 tile was not a valid benchmark geometry: 192 does
 not divide 4096, and its edge workgroup faulted before validation. No timing is
 recorded; non-divisible tiles require a separate bounds-safe harness.

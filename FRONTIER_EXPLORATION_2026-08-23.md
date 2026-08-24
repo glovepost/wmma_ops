@@ -1159,6 +1159,11 @@ The complementary A2/A3 permutation was exact at unchanged resources but
 averaged about 48.752 TFLOPS across five processes. Both A-fragment register
 pairings are closed as standalone optimizations.
 
+The final K-tile B0/B1 register groups were exchanged consistently through LDS
+loads and WMMA operands. The exact 120-VGPR candidate averaged about 48.711
+TFLOPS across five processes; its 49.585 short sample was noise, so final-tile
+B placement is closed.
+
 The complementary 256x192 tile was rejected before timing because the fixed
 4096-wide problem is not divisible by 192. Its edge workgroup faulted on the
 packed/output bounds, so it supplies no kernel performance result.
