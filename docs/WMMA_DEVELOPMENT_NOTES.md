@@ -3974,6 +3974,14 @@ invalid gfx1151 image before validation. The edge predicates are therefore
 load-bearing in the generated schedule; this fixed-tile specialization is
 closed until the epilogue is redesigned rather than mechanically stripped.
 
+The source redesign was then implemented behind `WMMA_BP_FULL_TILE_STORE=1`.
+It keeps the ordinary exec state and fragment mapping but removes per-element
+bounds checks for the exact 256x128 record geometry. Five launches were exact
+at 47.749, 47.805, 47.555, 47.730, and 47.558 TFLOPS (47.679 average, 47.555
+floor). The source full-tile epilogue is safe but slower than the
+hand-scheduled delta-2 leader, so it is closed as a standalone performance
+route.
+
 The complementary one-sided B producer was then built with
 `WMMA_BP_HYBRID_B_PINGPONG=1`, leaving A in the active buffer. It stayed exact
 at two blocks/16 waves, but five medians were 45.090, 45.107, 44.805, 44.976,

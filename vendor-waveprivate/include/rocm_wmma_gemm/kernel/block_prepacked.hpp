@@ -88,6 +88,9 @@ namespace rocm_wmma_gemm
 #ifndef WMMA_BP_VECTOR_EPILOGUE
 #define WMMA_BP_VECTOR_EPILOGUE 0
 #endif
+#ifndef WMMA_BP_FULL_TILE_STORE
+#define WMMA_BP_FULL_TILE_STORE 0
+#endif
 #ifndef WMMA_BP_STREAM_B_BARRIER
 #define WMMA_BP_STREAM_B_BARRIER 0
 #endif
@@ -1498,6 +1501,24 @@ struct block_prepacked_gemm
         };
 #endif
 
+#if WMMA_BP_FULL_TILE_STORE
+        // The fixed-shape benchmark is exactly divisible by the packed tile.
+        // Keep this specialization source-defined rather than deleting the
+        // generated exec masks: callers must pass the full 4096x4096 shape.
+        static_assert(block_m == 256 && block_n == 128 && WMMA_BP_PACK_N,
+                      "full-tile store is specific to the record geometry");
+        auto store_full_tile = [&]<bool opsel>(fragment<half, wmma_tile>& frag,
+                                               int row,
+                                               int col)
+        {
+            #pragma unroll
+            for(int i = 0; i < wmma_tile / 2; ++i)
+                C[static_cast<size_t>(row + 2 * i) * static_cast<size_t>(N)
+                  + static_cast<size_t>(col)]
+                    = frag[2 * i + (opsel ? 1 : 0)];
+        };
+#endif
+
         #pragma unroll
         for(int wm = 0; wm < warp_tile_m; ++wm)
         {
@@ -1538,6 +1559,12 @@ struct block_prepacked_gemm
                 else
                 {
                     if(wn < 2)
+#if WMMA_BP_FULL_TILE_STORE
+                        store_full_tile.template operator()<false>(
+                            c_n[wm][wn],
+                            block_row + warp_m_base + wm * wmma_tile + half_wave,
+                            block_col + warp_n_base + wn * wmma_tile + half_lane);
+#else
                         store_matrix<m_layout::row_major, false, false>(
                             C,
                             c_n[wm][wn],
@@ -1545,7 +1572,14 @@ struct block_prepacked_gemm
                             block_col + warp_n_base + wn * wmma_tile + half_lane,
                             M,
                             N);
+#endif
                     else
+#if WMMA_BP_FULL_TILE_STORE
+                        store_full_tile.template operator()<true>(
+                            c_n[wm][wn - 2],
+                            block_row + warp_m_base + wm * wmma_tile + half_wave,
+                            block_col + warp_n_base + wn * wmma_tile + half_lane);
+#else
                         store_matrix<m_layout::row_major, false, true>(
                             C,
                             c_n[wm][wn - 2],
@@ -1553,6 +1587,7 @@ struct block_prepacked_gemm
                             block_col + warp_n_base + wn * wmma_tile + half_lane,
                             M,
                             N);
+#endif
                 }
 #endif
             }

@@ -1045,6 +1045,18 @@ function` before validation. The apparent gain is rejected: these predicates
 are entangled with the generated exec state, and fixed-shape specialization is
 not a safe route without redesigning the epilogue from source.
 
+### 2026-08-24 source full-tile store specialization
+
+The epilogue was then redesigned in source behind
+`WMMA_BP_FULL_TILE_STORE=1`. The opt-in helper writes the N-packed fragments
+without per-element bounds checks while retaining the normal kernel exec state
+and fragment mapping; it is statically restricted to the 256x128 record
+geometry. All five launches passed the exact tuple and retained two
+blocks/16 waves, but medians were **47.749, 47.805, 47.555, 47.730, and
+47.558 TFLOPS** (47.679 average, 47.555 floor). Source-level full-tile stores
+are therefore correct but slower than the hand-scheduled delta-2 leader and
+are closed as an independent path.
+
 ### 2026-08-24 hybrid-B ping-pong screen
 
 The complementary one-sided producer was built with B ping-pong and A left in
