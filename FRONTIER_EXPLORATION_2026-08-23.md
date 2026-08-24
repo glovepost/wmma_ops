@@ -362,6 +362,30 @@ compared with the 49.035 qualification. The isolated group screen is prepared
 by `build-wmma-row-order-isolation.sh`; re-bracket it only after the Ember
 release and under the shared lock.
 
+### Row-order isolation result
+
+The follow-up bracket ran after the release handoff with identical 20-warmup,
+five-block, 20-iteration timing settings and the complete correctness check.
+It used two controls to expose package drift:
+
+| Schedule | TFLOPS |
+|---|---:|
+| Opening control | 49.295 |
+| g1 = 0312 | 49.285 |
+| g2 = 0312 | 49.329 |
+| g3 = 0312 | 49.078 |
+| g1 + g2 | 49.006 |
+| g1 + g3 | 49.091 |
+| g2 + g3 | 49.095 |
+| all groups = 0312 | **49.401** |
+| Closing control | 49.176 |
+
+Every form remained at 120 VGPR, 22 SGPR, 18 KiB LDS, zero spills, and the
+full rocBLAS tuple. The all-group form is about 0.34% above the two-control
+midpoint, but the sign is not isolated from package/order drift and no fresh
+process passed the 50-TFLOPS gate. Keep it as the next short-screen candidate;
+the delta-2 allocation remains the qualified research base.
+
 ### Late one-barrier and geometry sweep
 
 The remaining one-barrier layouts were implemented and screened against a

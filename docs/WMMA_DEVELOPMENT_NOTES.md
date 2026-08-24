@@ -3638,3 +3638,14 @@ The apparent 0312 gain is +1.04% over the same-pass control midpoint, not a
 new record. Do not compare its absolute throughput with the 49.035-TFLOPS
 five-process qualification. Re-bracket the isolated groups when the GPU is
 available, then require five fresh processes before promotion.
+
+The follow-up isolation bracket later ran with identical 20-warmup,
+five-block, 20-iteration settings and full validation on every process.
+Opening/closing controls were 49.295/49.176 TFLOPS. Group-specific orders
+g1/g2/g3 reached 49.285/49.329/49.078; g1+g2, g1+g3, and g2+g3 reached
+49.006/49.091/49.095. The all-group 0312 schedule reached **49.401 TFLOPS**.
+All candidates stayed at 120 VGPR, 22 SGPR, 18 KiB LDS, zero spills, and the
+exact normalized error tuple. The all-group result is a useful short-screen
+candidate, not a new record: its approximately 0.34% edge over the two-control
+midpoint is not separated from package/order drift and it has no fresh-process
+50-TFLOPS qualification.

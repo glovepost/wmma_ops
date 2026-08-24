@@ -286,6 +286,15 @@ The isolated group-1/group-2/group-3 follow-up is prepared in
 `build-wmma-row-order-isolation.sh` and remains unqualified until the shared
 GPU is available.
 
+That isolation bracket subsequently ran with the full correctness gate on all
+eight forms. Opening and closing controls were 49.295/49.176 TFLOPS. The
+group-specific results were g1 49.285, g2 49.329, g3 49.078, g1+g2 49.006,
+g1+g3 49.091, and g2+g3 49.095 TFLOPS. The all-group 0312 form reached 49.401
+TFLOPS, but the control drift and the lack of a sustained fresh-process screen
+keep it below promotion. Every process reproduced normalized maximum error
+0.018779343, RMS 0.035428338, and cosine 0.999977929. Retain all-group 0312
+as the next short-screen candidate; do not replace the delta-2 leader yet.
+
 The latest occupancy-preserving barrier experiments did not close that gap.
 A hand-scheduled compact interleaved ping-pong kernel retained 118 VGPR, two
 blocks/16 waves, 30 KiB LDS, and one barrier per K16, but reached only 46.024
