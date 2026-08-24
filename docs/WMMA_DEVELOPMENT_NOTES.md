@@ -3031,7 +3031,7 @@ different numerical and input-layout contracts and must not be conflated.
 | Repository FP16 input / FP32 accumulation and output | 41.322 TFLOPS peak | Full rocBLAS-reference validation; five-process median 40.900 TFLOPS, so the sustained promotion gate remains open |
 | Upstream FP16 input / FP16 output control | 46.082 TFLOPS median | Reproduced from three fresh processes; external comparison, not the repository record |
 | Original-layout FP16-output control in the block-pack campaign | 45.697 TFLOPS | Same-pass screening control |
-| Persistent block/K-major FP16-output inputs | **48.614 TFLOPS** | Current correct sustained leader for the separate prepacked-input contract |
+| Persistent block/K-major FP16-output inputs | **49.035 TFLOPS average** | Five fresh 100-iteration processes; current sustained leader for the separate prepacked-input contract |
 | Best short persistent block/K-major pass | 49.573 TFLOPS | Below the 50 TFLOPS gate and not sustained |
 
 The retained persistent-input leader is a 256x128 N-packed, padding-8 kernel.
@@ -3185,8 +3185,9 @@ more latency-hiding waves on this target.
 The independent A/B padding sweep confirms p8 as the unique single-buffer
 optimum, including previously untested odd strides.  A reversible CPU-EPP
 bracket changed the p8 leader by only 0.35% with the GPU fixed at 2.9 GHz.
-The retained result is therefore still 48.614 TFLOPS sustained under the
-block/K16-prepacked FP16-output contract; the 50-TFLOPS gate is not met.
+At this stage the retained result was still 48.614 TFLOPS sustained under the
+block/K16-prepacked FP16-output contract; the later register-phase result
+supersedes it, while the 50-TFLOPS gate remains unmet.
 
 The follow-on resident-fragment and instruction-policy checks also closed
 without a promotion.  Keeping all four B fragments resident while streaming A
@@ -3490,3 +3491,60 @@ than the 16-wave base. Front-loading two more LDS operations and reading WMMA
 operands from an alternate register bank cost more than overlapping the three
 load/wait gaps saves. Retain the placement sweep as an optimization method;
 close this one-fragment lookahead dataflow.
+
+### 2026-08-23: Register boundary phase sets a new sustained leader
+
+The B-lookahead placement spread motivated a semantics-preserving register
+experiment. `tools/shift_vgpr_boundary_asm.py` leaves the eight FP16
+accumulator fragments in v1--v64 and shifts every register at v65 or above by
+one common delta. Addresses, A/B fragments, refill values, instruction order,
+and dependencies therefore remain mutually unchanged; only their physical
+phase relative to the accumulators moves.
+
+Odd deltas failed assembly before GPU use. The loop contains:
+
+```asm
+v_dual_mov_b32 v58, v57 :: v_dual_add_nc_u32 v73, 0x3000, v73
+```
+
+After an odd boundary shift both destinations are even, violating gfx1151's
+requirement that one dual-VALU destination be even and the other odd. Replacing
+the pair with scalar instructions would change the instruction stream, so the
+clean sweep retained only deltas 2/4/6.
+
+All three forms passed the full rocBLAS tuple with 22 SGPR, 18 KiB LDS, and no
+spills:
+
+| Boundary delta | VGPR | Reported occupancy | TFLOPS |
+|---:|---:|---:|---:|
+| 0 control | 118 | 2 blocks / 16 waves | 48.399 / 48.381 |
+| 2 | 120 | 2 blocks / 16 waves | **49.439** |
+| 4 | 122 | 3 blocks / 24 waves | 45.049 |
+| 6 | 124 | 3 blocks / 24 waves | 46.025 |
+
+Delta 2 stayed positive in a longer `C,X` screen. Candidate medians were
+49.431/49.435/49.177/49.249 TFLOPS, averaging **49.323**. Their immediately
+preceding controls were 48.307/48.181/48.147/48.134, averaging 48.192; the
+gain is **+2.35%**. The closing control was 48.238 and documents drift.
+
+The record qualification then ran five fresh processes with 20 warmups and
+five timing blocks of 100 iterations per process:
+
+| Process | Median ms | TFLOPS |
+|---:|---:|---:|
+| 1 | 2.799422 | 49.095 |
+| 2 | 2.806014 | 48.980 |
+| 3 | 2.805167 | 48.995 |
+| 4 | 2.805672 | 48.986 |
+| 5 | 2.798256 | 49.116 |
+
+The average is **49.035 TFLOPS**, the floor is **48.980 TFLOPS**, and every
+process reproduced normalized maximum error 0.018779343, RMS 0.035428338, and
+cosine similarity 0.999977929. Opening and closing combined-base controls were
+48.103/47.941 TFLOPS. Delta 2 is +2.11% over their average and +0.87% over the
+former 48.614-TFLOPS sustained leader.
+
+Promote the delta-2 phase as the new prepacked-contract research base. It does
+not meet the 50-TFLOPS goal: the sustained gap is 1.97%. The delta-4/6 failure
+despite 24 reported waves is equally important--this uplift is a physical
+WMMA register-phase effect, not an occupancy result.

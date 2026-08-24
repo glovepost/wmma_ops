@@ -143,7 +143,8 @@ normalized maximum error 0.018779343, RMS 0.035428338, and cosine
 |---|---:|---:|---|
 | Same-pass original-layout control | 45.697 | 3.007650 | Control |
 | 256x128 block-packed M, p8 | 48.340 | 2.843000 | Retained |
-| 256x128 block-packed N, p8 | 48.614 | 2.827130 | Retained leader |
+| 256x128 block-packed N, p8 | 48.614 | 2.827130 | Previous sustained leader |
+| N-p8 + combined schedule + VGPR delta 2 | 49.035 average | 2.802906 average | Five-process sustained leader |
 | Best short block-packed pass | 49.573 | 2.772440 | Below 50; not sustained |
 | 128x256 transposed-reuse N, p8 | 46.839 | 2.934000 | Rejected |
 | 256x256, p8 | 37.680 | 3.648000 | Rejected |
@@ -699,13 +700,50 @@ is still 4.8% below the control. The deeper initial LDS queue and alternate
 WMMA operand bank cost more than the three hidden wait gaps save, and additional
 reported residency again fails to predict throughput.
 
+### Semantics-preserving VGPR boundary phase
+
+The B lookahead sweep proved that physical register assignment changes WMMA
+throughput, but its dataflow confounded placement with an alternate live B
+bank. A cleaner transform keeps every instruction and dependency unchanged:
+accumulators remain in v1--v64, while every address, A/B fragment, and refill
+register at v65 or above is shifted together by a small gap. This changes the
+operand-to-accumulator bank phase without changing relative live ranges.
+
+Odd shifts were rejected statically because an existing dual-VALU pair then
+places both destinations on even registers; gfx1151 requires one even and one
+odd destination. Splitting that instruction would confound the sweep, so only
+the instruction-identical deltas 2/4/6 were assembled. All use 22 SGPR,
+18 KiB LDS, and zero spills.
+
+The exact short bracket was sharply phase-selective:
+
+| Boundary delta | VGPR | Reported occupancy | TFLOPS |
+|---:|---:|---:|---:|
+| 0 control | 118 | 2 blocks / 16 waves | 48.399 / 48.381 |
+| 2 | 120 | 2 blocks / 16 waves | **49.439** |
+| 4 | 122 | 3 blocks / 24 waves | 45.049 |
+| 6 | 124 | 3 blocks / 24 waves | 46.025 |
+
+Delta 2 then averaged 49.323 TFLOPS across four longer interleaved runs versus
+48.192 for their immediately preceding controls (+2.35%). The strict record
+screen used five fresh processes, 20 warmups, and five timing blocks of 100
+iterations each. Their medians were **49.095, 48.980, 48.995, 48.986, and
+49.116 TFLOPS**, for a **49.035-TFLOPS average** and **48.980-TFLOPS floor**.
+Opening/closing combined-base controls reached 48.103/47.941. Every process
+reproduced the full rocBLAS tuple.
+
+This promotes delta 2 as the new sustained prepacked-contract leader: +2.11%
+over its same-pass control average and +0.87% over the former 48.614-TFLOPS
+leader. It is not a 50-TFLOPS result; the remaining sustained gap is 1.97%.
+The delta-4/6 collapse despite 24 reported waves also makes the mechanism
+clearer: physical WMMA register phase dominates the nominal occupancy change.
+
 ## Decision
 
-The correct block/K-major p8 kernel materially exceeds the original-layout
-control and has reached 48.614 TFLOPS sustained in the longer screen and
-49.573 TFLOPS in the best short pass.  It remains a distinct persistent-input
-contract and has not met the 50 TFLOPS promotion gate, so no published source
-record has been changed.  The research kernels and negative results are kept
-for reproducibility.  Continue with occupancy-preserving barrier reduction and
-codegen scheduling; do not promote isolated 50+ samples that fail the
-sustained same-pass control.
+The correct block/K-major p8 kernel with progressive refill, scalar-offset
+MUBUF, and the delta-2 VGPR boundary shift now averages 49.035 TFLOPS across
+five fresh 100-iteration processes, with a 48.980-TFLOPS floor. It remains a
+distinct persistent-input contract and has not met the 50 TFLOPS promotion
+gate. The research kernels and negative results are kept for reproducibility.
+Continue from the measured delta-2 register phase; do not promote isolated 50+
+samples that fail the sustained same-pass control.

@@ -261,13 +261,15 @@ This result demonstrates that a full data-moving IU4 kernel can exceed the
 50-operations/s target, but it remains a distinct integer contract.  It is not
 eligible for the FP16 TFLOPS table or record gate.
 
-The current FP16-output, block/K16-prepacked research leader is 48.614 TFLOPS
-at 4096 cubed (2.827130 ms).  It uses a 256x128 block, eight waves, p8 A/B LDS
-rows, 118 VGPR, 22 SGPR, 18 KiB LDS, and no spills.  The result passed a full
-rocBLAS reference check, but it is a persistent-input contract: packing is
-outside the timed region.  A 49.573-TFLOPS short sample and two isolated 50+
-samples were rejected because longer same-pass runs returned to roughly
-47.4--48.6 TFLOPS.  The 50-TFLOPS FP16 promotion gate therefore remains open.
+The current FP16-output, block/K16-prepacked research leader averages **49.035
+TFLOPS** at 4096 cubed across five fresh 100-iteration processes. Their medians
+are 49.095/48.980/48.995/48.986/49.116 TFLOPS, with a 48.980-TFLOPS floor and
+2.802906-ms average median time. It uses a 256x128 block, eight waves, p8 A/B
+LDS rows, 120 VGPR, 22 SGPR, 18 KiB LDS, and no spills. The result passed a
+full rocBLAS reference check in every process, but it is a persistent-input
+contract: packing is outside the timed region. The previous sustained leader
+was 48.614 TFLOPS. A 49.573-TFLOPS short sample and two isolated 50+ samples
+remain non-promotable; the sustained 50-TFLOPS FP16 gate is still open.
 
 The latest occupancy-preserving barrier experiments did not close that gap.
 A hand-scheduled compact interleaved ping-pong kernel retained 118 VGPR, two
@@ -316,8 +318,9 @@ The negative result is conclusive for this family: added nominal occupancy
 does not rescue a poor LDS bank phase, while split refill loses useful
 B-load/WMMA overlap. Static `.vgpr_count` also proved insufficient for
 occupancy inference because `.amdhsa_next_free_vgpr` stayed 169 and the runtime
-query was non-monotonic. The 129-VGPR p8 streamed form remains the best
-four-wave candidate; the overall FP16 leader remains 48.614 TFLOPS.
+query was non-monotonic. At this stage the 129-VGPR p8 streamed form remained
+the best four-wave candidate and the overall FP16 leader remained 48.614
+TFLOPS; the later register-phase result supersedes the latter number.
 
 Single-operand ping-pong also failed to advance the leader. Double-buffering
 only A preserves two blocks/16 waves at 127 VGPR and 30 KiB LDS; split,
@@ -358,6 +361,20 @@ combined-base controls. Alternate B base placement changed throughput by
 matters, but the best form still lost 4.8%. The 126/128-VGPR forms reported
 three blocks/24 waves; those extra waves did not repay deeper LDS queuing and
 the alternate WMMA operand bank.
+
+A semantics-preserving register-boundary shift produced the new leader. It
+holds accumulators at v1--v64 and shifts every address/fragment/refill VGPR
+together, changing only the physical WMMA operand-to-accumulator phase. Odd
+deltas violate the gfx1151 even/odd destination rule for an existing dual-VALU
+instruction, so instruction-identical deltas 2/4/6 were tested. Delta 2 reached
+49.439 TFLOPS in the short bracket at 120 VGPR and the same reported 16 waves;
+delta 4/6 reported 24 waves but fell to 45.049/46.025 TFLOPS.
+
+Four longer delta-2 runs averaged 49.323 TFLOPS versus 48.192 immediately
+preceding controls (+2.35%). The five-process 100-iteration screen then
+averaged 49.035 TFLOPS against 48.103/47.941 bracketing controls, +2.11% over
+their average and +0.87% over the former 48.614-TFLOPS leader. This promotes
+delta 2 as the research base and leaves a 1.97% sustained gap to 50 TFLOPS.
 
 At 256 GB/s, the corresponding compute-to-memory ridge point is about
 232 FLOP/byte (`59.4e12 / 256e9`), not 106 FLOP/byte. Both inputs should be
