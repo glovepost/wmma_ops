@@ -1040,6 +1040,14 @@ so the fault belongs to the candidate's altered live range/issue order. The
 repack is closed; the tail B fragment still occupies the high VGPR range and no
 allocation-class reduction was achieved.
 
+The next dataflow screen moved the next B global load to the top of the K loop,
+before the ten LDS fragment reads, and reordered VMEM retirement stores to match
+the new completion order. This gave B the full WMMA window of latency hiding,
+but an interleaved five-pair bracket measured 48.784 TFLOPS versus 48.823 for
+the delta-2 control. A B-first late-load ordering was also exact but reached
+48.525 TFLOPS in the initial screen. Both global-load orderings are closed as
+regressions.
+
 ## Decision
 
 The correct block/K-major p8 kernel with progressive refill, scalar-offset

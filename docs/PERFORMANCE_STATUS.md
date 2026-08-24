@@ -677,6 +677,13 @@ the tail B fragment still requires the high VGPR range, so the transformation
 did not lower the allocation class and introduced an unsafe live-range/issue
 ordering.
 
+The next dataflow screen moved the next B global load to the top of the K loop,
+before the ten LDS fragment reads, and reordered VMEM retirement stores to match
+the new completion order. This gave B the full WMMA window of latency hiding,
+but an interleaved five-pair bracket measured 48.784 TFLOPS versus 48.823 for
+the delta-2 control. A B-first late-load ordering was also exact but reached
+48.525 TFLOPS. Both global-load orderings are closed as regressions.
+
 ## Record protocol
 
 Use this protocol before promoting a result in the README:
