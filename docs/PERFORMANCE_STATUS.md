@@ -1072,13 +1072,14 @@ pressure. Raw profiler output remains on the host at
 
 ### 2026-08-24 two-producer ring screen
 
-The inter-wave producer/consumer kernel was rebuilt with two producer waves
-feeding its four consumer waves (`WMMA_PC_PRODUCERS=2`). The candidate
-deadlocked during its first warm-up, before the harness could print occupancy,
-validation, or timing. It was terminated by its named-container watchdog and
-production was restored through the host wrapper. This is a synchronization
-failure, not a throughput result; the one-producer ring remains the only valid
-producer/consumer configuration in this family.
+The first two-producer launch deadlocked because the harness still launched
+five waves: its default `RECORD_PRODUCER_WAVES=5` mismatched the kernel's two
+producer plus four consumer waves. After rebuilding with six launched waves,
+the ring was exact and reported three active blocks/18 waves per CU. Three
+fresh processes measured **13.070, 12.746, and 12.800 TFLOPS** (12.872 average),
+far below the packed leader. The architecture is now correctly closed as a
+throughput regression; the initial deadlock was a harness error, not a kernel
+result.
 
 ### 2026-08-24 K-loop SCC shortcut
 
