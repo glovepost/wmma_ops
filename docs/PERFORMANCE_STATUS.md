@@ -954,6 +954,10 @@ cosine -0.000019926) behind a 42.198-TFLOPS timing. Its earlier 41.345-TFLOPS
 “exact” result used the mismatched K16 host layout and is invalid. Correct K32
 packing repairs only the generic path, which remains below delta-2.
 
+The corrected K2 path with `WMMA_BP_NO_EXPLICIT_VMWAIT=1` stayed exact but
+reached 44.321 TFLOPS, statistically identical to the 44.289 control. Removing
+the explicit VMEM wait does not recover the K32 handoff cost.
+
 The companion `WMMA_BP_HALF_SWIZZLE=1` layout was also screened on the same
 256x128 packed shape. It passed the complete exactness tuple at unchanged
 two-block occupancy, but reached only 38.402 TFLOPS. Half-word LDS swizzling is

@@ -3838,6 +3838,9 @@ cosine -0.000019926) behind a 42.198-TFLOPS timing; its earlier 41.345-TFLOPS
 “exact” result used mismatched K16 packing and is invalid. Correct packing does
 not make K32 staging competitive.
 
+The corrected K2 no-explicit-VMEM-wait form was also exact but reached 44.321
+TFLOPS versus 44.289 for the control. The K32 handoff cost remains load-bearing.
+
 The half-word LDS swizzle companion was exact at two-block occupancy but
 reached only 38.402 TFLOPS. This layout permutation is also closed; further
 progress needs a new packed producer rather than another swizzle.
