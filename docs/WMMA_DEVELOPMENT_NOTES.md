@@ -3868,6 +3868,10 @@ rejected the vector instruction at assembly (only scalar `s_buffer_load_b256`
 was suggested). No image or timing exists; this instruction-level path is
 closed by the ISA.
 
+The source `warp_tile_m=2` ownership variant was also screened. Four M-waves
+derived a 128x128 tile and failed exactness at 23.282 TFLOPS; eight M-waves
+restored 256x128 but failed launch before validation. No candidate is retained.
+
 Complementary asymmetric A/B padding pairs (4/12, 12/4, 2/14, 14/2, 6/10,
 10/6) all stayed exact but measured only 25.755--27.389 TFLOPS. The stride
 phases cannot be decoupled without upsetting the WMMA/LDS access pattern, so

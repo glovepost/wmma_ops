@@ -1000,6 +1000,15 @@ the vector form (`invalid instruction`, suggesting only scalar
 `s_buffer_load_b256`), so no device image, correctness result, or timing exists.
 The instruction-width fusion is an ISA-level dead end.
 
+### 2026-08-24 warp-tile ownership screen
+
+The source packed kernel was rebuilt with `warp_tile_m=2` to reduce per-wave
+M-fragment residency. With the existing four M-waves the derived geometry
+became 128x128 and produced an exactness failure at 23.282 TFLOPS. An
+eight-M-wave rebuild restored the 256x128 geometry but hit an unspecified
+launch failure before validation. The alternative tile-ownership architecture
+is closed without a performance result.
+
 ### 2026-08-24 asymmetric LDS padding screen
 
 Complementary A/B stride pairs were tested on the packed 256x128 source
