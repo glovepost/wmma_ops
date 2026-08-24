@@ -4057,3 +4057,9 @@ correctly refused to apply its p8-specific descriptor rewrite, so no invalid
 hand image was timed. The source kernel itself was exact at two-block/16-wave
 occupancy but reached 45.272 TFLOPS in a 10/10 screen, closing zero padding
 without weakening the p8 contract.
+
+Keeping A at p8 while removing B padding was tested as a mixed-bank control.
+The p8-specific hand patch correctly refused the changed descriptor pattern,
+and the source-only A8/B0 image was exact but reached 44.993 TFLOPS in a 10/10
+screen. This mixed layout is closed until a separate hand descriptor generator
+exists.

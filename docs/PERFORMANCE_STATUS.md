@@ -1260,3 +1260,9 @@ pattern is specific to the p8 address schedule; the loadable source image
 passed exactness at two blocks/16 waves but reached only **45.272 TFLOPS** in
 a 10/10 screen. Zero padding is not a route to 50 and is not mixed with the
 hand-scheduled p8 record.
+
+An A8/B0 mixed-padding source control was also attempted. The hand patcher
+rejected it because the descriptor rewrite is tied to the p8 address pattern;
+the unpatched source image remained exact at two blocks/16 waves but reached
+44.993 TFLOPS in a 10/10 screen. Removing B padding without a new hand
+descriptor is therefore closed.
