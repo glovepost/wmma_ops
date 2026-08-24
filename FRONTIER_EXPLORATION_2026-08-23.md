@@ -1080,6 +1080,14 @@ normalized error 1.34 and cosine near zero. The transposed address/descriptor
 contract must be regenerated from source; textual conversion is not safe, so
 that apparent result is explicitly rejected.
 
+The descriptor-correct follow-up was regenerated in source with raw-buffer
+vector loads. It passed exact validation at 45.897 TFLOPS for 128x256, versus
+45.930 for the source control. Reusing the same path on 256x128 reached 47.307
+versus 47.251 TFLOPS. Because the latter delta is within screening noise and
+both are below the 49.035-TFLOPS leader, the raw-buffer-only path is closed.
+The temporary include override was removed; no source or binary artifact from
+the experiment is part of the retained branch.
+
 ## Decision
 
 The correct block/K-major p8 kernel with progressive refill, scalar-offset

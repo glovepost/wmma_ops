@@ -5,7 +5,7 @@
 > intermediate conclusions, superseded filenames, old environment assumptions,
 > results from different matrix shapes, and hypotheses that were later
 > rejected. It is intentionally retained as experiment history. Use
-> [`PERFORMANCE_STATUS.md`](PERFORMANCE_STATUS.md) for the refreshed 2026-08-23
+> [`PERFORMANCE_STATUS.md`](PERFORMANCE_STATUS.md) for the refreshed 2026-08-24
 > source state and [`README.md`](README.md) for the documentation map. The
 > current validated standalone peak is 41.322 TFLOPS; every “current status”
 > label below is local to its historical section and is not the active plan.
@@ -14,6 +14,17 @@ The notebook begins with the original code-organization plan, then appends
 fragment-layout investigations, correctness results, optimization experiments,
 and performance summaries. Search by section title or date; it is not intended
 to be read as one internally consistent specification.
+
+## 2026-08-24: source-level raw-buffer prefetch boundary
+
+The transposed 128x256 refill experiment was rebuilt from source with an
+explicit raw-buffer descriptor and vector loads. This avoids the unsafe textual
+conversion that previously produced an apparent >50-TFLOPS timing. The rebuilt
+candidate was exact, but measured 45.897 TFLOPS against a 45.930-TFLOPS source
+control. The same source path on 256x128 measured 47.307 versus 47.251 TFLOPS,
+a noise-sized change. The temporary include override and binaries were deleted;
+no patch was promoted. Descriptor-correct MUBUF alone does not remove the refill
+bottleneck, so a future attempt must change the producer/consumer schedule.
 
 # Code organization plan for `wmma_gemm.hip`
 

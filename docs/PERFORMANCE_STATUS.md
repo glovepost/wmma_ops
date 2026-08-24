@@ -1,7 +1,7 @@
 # gfx1151 WMMA performance status
 
 This is the current performance ledger and optimization plan for the repository.
-It was refreshed on 2026-08-23 with the ordinary-layout standalone harness,
+It was refreshed on 2026-08-24 with the ordinary-layout standalone harness,
 the block/K16-prepacked research harness, the Paperclip literature pass, and
 the current assembly-search tooling. In-progress extension-kernel changes in
 the shared worktree were deliberately not included. The older development
@@ -757,3 +757,13 @@ Current ROCm documentation lists gfx1151 as supported by ROCm Compute Profiler.
 Counter availability still depends on the installed driver and profiler, so
 query the target host and document unavailable counters instead of assuming
 that all counters work or that none do.
+
+### 2026-08-24 source-level raw-buffer prefetch screen
+
+The transposed refill path was regenerated from source with raw-buffer loads
+and an explicit descriptor, rather than textual register substitution. It
+preserved the full exactness tuple. On 128x256 it measured 45.897 TFLOPS versus
+45.930 for the source control; on 256x128 it reached 47.307 versus 47.251.
+The latter difference is within screening noise and neither geometry approaches
+the 49.035-TFLOPS delta-2 leader. The temporary header and binaries were
+removed after the run. Raw-buffer prefetch is closed as a standalone route.
