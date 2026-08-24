@@ -3274,11 +3274,38 @@ reached 44.839 TFLOPS. All passed the full rocBLAS reference tuple. Bracketed
 129-VGPR repeats were 45.585/45.598 versus 48.031/48.048 for the retained p8
 kernel.
 
-The mechanism is unambiguous. Five 12-KiB workgroups consume 60 KiB LDS; a
-sixth cannot fit, so 120 VGPR cannot improve the already LDS-limited runtime
-occupancy. Splitting the refill merely removes B-load/WMMA overlap. Retain the
-129-VGPR streamed-B implementation as the best four-wave form, but do not
-promote it or run a longer screen.
+That first result established a joint-resource hypothesis, not a single-cause
+answer: five 12-KiB workgroups consume 60 KiB LDS, while the 129-VGPR streamed
+form remains in the 144-register allocation class. We therefore swept both
+constraints separately and together.
+
+With the 129-VGPR streamed schedule, p8p2/p4p4/p2p0/p0p0 reduced LDS to
+10.5/10/8.5/8 KiB and reached 40.608/26.696/37.495/45.445 TFLOPS. The host
+occupancy API reported five blocks/20 waves for every form. Zero padding is a
+surprising near-neutral LDS layout for this schedule; the intermediate pitches
+are not, and p4p4 is catastrophic.
+
+Adding split MUBUF refill lowered the same forms to 124/122/120/119 VGPR. The
+p8p2 and p4p4 variants did report six blocks/24 waves, but reached only
+40.854/26.495 TFLOPS. The p2p0 and p0p0 variants still reported five blocks/20
+waves and reached 35.426/43.796 TFLOPS. Every candidate passed the full
+rocBLAS reference tuple. Bracket controls were 45.827/45.698 TFLOPS for the
+129-VGPR p8 stream and 48.001/48.234 for the retained p8 kernel.
+
+Failure supplied the decisive lessons. Six reported blocks do not compensate
+for an unfavorable LDS bank phase, and removing B-load overlap costs speed
+when residency does not rise. Also, do not infer occupancy from `.vgpr_count`
+alone: it drops monotonically to 119, but `.amdhsa_next_free_vgpr` stays 169
+and the host occupancy query is non-monotonic. Retain the 129-VGPR p8 streamed
+implementation as the best four-wave form, but do not promote it or run a
+longer screen.
+
+Paperclip also extracted [TileFuse](https://arxiv.org/abs/2606.11357). Its
+XDNA2 implementation is not portable, but its offline layout rule is directly
+useful to Ember: store each pre-tiled quantized weight block in physical
+consumer order and colocate its scales/metadata, so the runtime kernel need
+not gather or materialize them. This is an inference-layout avenue, not an FP16
+record claim.
 
 Primary papers:
 
@@ -3286,3 +3313,4 @@ Primary papers:
 - [Nautilus](https://arxiv.org/abs/2604.14825)
 - [VeriLocc](https://arxiv.org/abs/2506.17506)
 - [GPU-Tile-Sim](https://arxiv.org/abs/2607.11262)
+- [TileFuse](https://arxiv.org/abs/2606.11357)

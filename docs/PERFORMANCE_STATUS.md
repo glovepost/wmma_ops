@@ -301,9 +301,23 @@ blocks/16 waves to five blocks/20 waves, and improved throughput from 41.419 to
 45.694 TFLOPS (+10.3%). Splitting the A/B refill live ranges and using one
 MUBUF vector offset reached 120 VGPR with zero spills, but the 12-KiB LDS tile
 already limits residency to five blocks. The 127/121/120-VGPR forms therefore
-remained at 20 waves and reached only 45.011/44.630/44.839 TFLOPS. All were
-exact; the lower-register forms lose B-load overlap without gaining occupancy.
-The retained p8 controls in the closing bracket reached 48.031/48.048 TFLOPS.
+remained at 20 waves and reached only 45.011/44.630/44.839 TFLOPS.
+
+A follow-up crossed both resource thresholds. Streamed-B p8p2/p4p4/p2p0/p0p0
+layouts used 10.5/10/8.5/8 KiB LDS and reached
+40.608/26.696/37.495/45.445 TFLOPS. Combining split refill lowered them to
+124/122/120/119 VGPR. The first two then reported six blocks/24 waves but
+reached only 40.854/26.495 TFLOPS; the last two still reported five blocks/20
+waves and reached 35.426/43.796. All were exact. The bracketed p8 stream
+controls reached 45.827/45.698 and retained-kernel controls reached
+48.001/48.234 TFLOPS.
+
+The negative result is conclusive for this family: added nominal occupancy
+does not rescue a poor LDS bank phase, while split refill loses useful
+B-load/WMMA overlap. Static `.vgpr_count` also proved insufficient for
+occupancy inference because `.amdhsa_next_free_vgpr` stayed 169 and the runtime
+query was non-monotonic. The 129-VGPR p8 streamed form remains the best
+four-wave candidate; the overall FP16 leader remains 48.614 TFLOPS.
 
 At 256 GB/s, the corresponding compute-to-memory ridge point is about
 232 FLOP/byte (`59.4e12 / 256e9`), not 106 FLOP/byte. Both inputs should be

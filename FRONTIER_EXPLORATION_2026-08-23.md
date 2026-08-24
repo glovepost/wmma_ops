@@ -486,7 +486,7 @@ retained W4A4 architecture.
 ### Paperclip literature pass and four-wave live-range split
 
 Paperclip full-text extraction was used for a focused pass over recent kernel
-work. Four findings map directly onto the gfx1151 frontier:
+work. Five findings map directly onto the gfx1151 frontier:
 
 - The FP16 study in [Hand-Written PTX Tensor-Core GEMM
   Kernels](https://arxiv.org/abs/2608.10103) found that halving accumulator
@@ -507,6 +507,12 @@ work. Four findings map directly onto the gfx1151 frontier:
   performance through tile-level data and order dependencies. For this kernel
   the relevant unit is therefore the complete `load -> WMMA -> handoff` graph,
   not the nominal latency of one load or barrier in isolation.
+- [TileFuse](https://arxiv.org/abs/2606.11357) reports that offline pre-tiling
+  should follow the kernel's physical consumption order and place quantization
+  metadata beside the weight tile that consumes it. Its XDNA2 microkernels are
+  not portable to gfx1151, but the layout rule is: prepack weights and scales
+  together for the inference kernel instead of paying runtime gather or
+  materialization costs.
 
 The new four-wave 128x128 experiment applies those lessons without changing
 the default kernel. A compiler scheduling fence after each B fragment keeps
@@ -530,12 +536,33 @@ reached 45.011 TFLOPS, split refill at 121 VGPR reached 44.630, and the
 120-VGPR MUBUF split reached 44.839. The bracketed 129-VGPR controls reached
 45.585/45.598 and the retained p8 controls reached 48.031/48.048 TFLOPS.
 
-The reason the 120-register boundary did not help is now measured rather than
-assumed: 12 KiB of LDS already caps this geometry at five resident blocks, so
-the lower register class cannot admit a sixth. The streamed-B 129-VGPR form is
-the retained four-wave result, but it remains 5.1% below the p8 control
-midpoint. The partial late-refill variants are kept as negative evidence; they
-do not advance to a longer promotion run.
+The first bracket isolated only one side of a joint allocation question. The
+12-KiB tile prevents the 120-VGPR form from admitting a sixth block, while the
+129-VGPR streamed form remains in a higher register class. A follow-up padding
+sweep therefore reduced LDS and register pressure together.
+
+Lowering LDS alone did not help: streamed-B p8p2, p4p4, p2p0, and p0p0 used
+10.5, 10, 8.5, and 8 KiB and reached 40.608, 26.696, 37.495, and 45.445
+TFLOPS, all at the host API's reported five blocks/20 waves. The p0p0 result is
+important because it retained the p8 streamed control's speed while crossing
+the LDS threshold; the other pitches exposed severe bank-phase penalties.
+
+Combining the split MUBUF refill with those layouts compiled at 124/122/120/119
+VGPR. The p8p2 and p4p4 forms reported six blocks/24 waves, yet reached only
+40.854 and 26.495 TFLOPS--essentially unchanged from their five-block
+counterparts. The p2p0 and p0p0 forms unexpectedly still reported five
+blocks/20 waves and reached 35.426 and 43.796 TFLOPS. All eight padding
+candidates passed the full rocBLAS reference tuple.
+
+This failure resolves two ambiguities. First, additional nominal occupancy
+does not recover throughput when the LDS access phase is poor. Second, static
+`.vgpr_count` is not a sufficient occupancy oracle on this code object: it
+falls to 119 while `.amdhsa_next_free_vgpr` remains 169 for all four combined
+forms, and the runtime occupancy result is non-monotonic. Use the runtime query
+as a screening observation, not proof of active hardware waves; only timing and
+counters can establish the mechanism. The 129-VGPR p8 streamed-B form remains
+the best four-wave result at about 45.7 TFLOPS, 5.1% below the retained p8
+leader, and no lower-padding form advances to a longer promotion run.
 
 ## Decision
 
