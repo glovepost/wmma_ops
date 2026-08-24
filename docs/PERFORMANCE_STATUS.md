@@ -970,3 +970,12 @@ result; this register/live-range producer rewrite is rejected.
 Adding an explicit `vmcnt(0)` before the high-register copy did not repair the
 same mismatch (49.274 TFLOPS). The failure is therefore not merely a copy
 ordering hazard; the high-register early-B image is closed.
+
+### 2026-08-24 asymmetric LDS padding screen
+
+Complementary A/B stride pairs were tested on the packed 256x128 source
+kernel: (4,12), (12,4), (2,14), (14,2), (6,10), and (10,6). Every candidate
+passed the exactness tuple and retained two-block occupancy, but the
+20-warmup/20-iteration screens reached only 25.755--27.389 TFLOPS. The
+operand stride phases are coupled by the WMMA/LDS access pattern; asymmetric
+padding is closed as a route to the leader.

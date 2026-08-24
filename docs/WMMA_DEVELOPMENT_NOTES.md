@@ -3847,6 +3847,11 @@ completion and copy-back still failed exactness at 49.575 TFLOPS. The apparent
 50+ result is therefore rejected; the live-range/register contract must be
 redesigned before this producer idea can be revisited.
 
+Complementary asymmetric A/B padding pairs (4/12, 12/4, 2/14, 14/2, 6/10,
+10/6) all stayed exact but measured only 25.755--27.389 TFLOPS. The stride
+phases cannot be decoupled without upsetting the WMMA/LDS access pattern, so
+this layout family is closed.
+
 An explicit VMEM wait before copying the high-register B vector was also
 tested; it remained wrong at 49.274 TFLOPS. The early-B image is closed rather
 than treated as a performance result.
