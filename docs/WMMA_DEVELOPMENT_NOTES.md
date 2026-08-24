@@ -3832,9 +3832,11 @@ schedule change is closed.
 The K32-per-stage source specialization was initially run with a host-packer
 mismatch: the kernel used K32 while `RECORD_K_SLICES` remained 1. That invalid
 44.350-TFLOPS result failed exactness. Rebuilding both sides for K32 repaired
-the output and measured 44.289 TFLOPS at two-block occupancy. Its dedicated K2
-ring remains exact at 41.345 TFLOPS; correct packing does not make K32 staging
-competitive.
+the output and measured 44.289 TFLOPS at two-block occupancy. The dedicated K2
+ring with correct host packing failed exactness (normalized error 1.365675535,
+cosine -0.000019926) behind a 42.198-TFLOPS timing; its earlier 41.345-TFLOPS
+“exact” result used mismatched K16 packing and is invalid. Correct packing does
+not make K32 staging competitive.
 
 The half-word LDS swizzle companion was exact at two-block occupancy but
 reached only 38.402 TFLOPS. This layout permutation is also closed; further

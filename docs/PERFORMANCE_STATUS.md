@@ -948,9 +948,11 @@ The source K2 specialization (`WMMA_BP_K_SLICES=2`) was first run with a
 host-packer mismatch: the kernel used K32 while `RECORD_K_SLICES` remained 1,
 so its 44.350-TFLOPS result failed exactness and was invalid. Rebuilding with
 both kernel and host packing set to K32 produced an exact 44.289 TFLOPS image
-at 120 VGPR/two-block occupancy. The dedicated K2 ring remains exact at 41.345
-TFLOPS. Correct packing repairs the generic path but does not make K32 staging
-competitive with delta-2.
+at 120 VGPR/two-block occupancy. Rebuilding the dedicated K2 ring with the same
+correct host packing instead failed exactness (normalized error 1.365675535,
+cosine -0.000019926) behind a 42.198-TFLOPS timing. Its earlier 41.345-TFLOPS
+“exact” result used the mismatched K16 host layout and is invalid. Correct K32
+packing repairs only the generic path, which remains below delta-2.
 
 The companion `WMMA_BP_HALF_SWIZZLE=1` layout was also screened on the same
 256x128 packed shape. It passed the complete exactness tuple at unchanged
