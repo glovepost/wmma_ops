@@ -3990,6 +3990,13 @@ denominators, but they sharpen the next design target: hide or remove the two
 workgroup handoffs without increasing the 18-KiB LDS footprint or 120-VGPR
 allocation. Raw files are retained at `/root/wmma-results/profile-delta2-new/`.
 
+The next producer/consumer experiment assigned two waves to global-to-LDS
+production and four to WMMA consumption. `WMMA_PC_PRODUCERS=2` deadlocked in
+the first warm-up and produced no validation or timing output. The named
+container was terminated safely and production restored; this closes the
+two-producer ring as a synchronization failure rather than a performance
+candidate.
+
 The next scalar-control probe removed the K-loop `s_cmp_eq_u32 s6, 0`, relying
 on the preceding decrement's SCC for the back-edge branch. Although the image
 assembled, gfx1151 rejected it as `invalid device function` before occupancy

@@ -1070,6 +1070,16 @@ remove the two workgroup handoffs without adding LDS capacity or register
 pressure. Raw profiler output remains on the host at
 `/root/wmma-results/profile-delta2-new/`.
 
+### 2026-08-24 two-producer ring screen
+
+The inter-wave producer/consumer kernel was rebuilt with two producer waves
+feeding its four consumer waves (`WMMA_PC_PRODUCERS=2`). The candidate
+deadlocked during its first warm-up, before the harness could print occupancy,
+validation, or timing. It was terminated by its named-container watchdog and
+production was restored through the host wrapper. This is a synchronization
+failure, not a throughput result; the one-producer ring remains the only valid
+producer/consumer configuration in this family.
+
 ### 2026-08-24 K-loop SCC shortcut
 
 The hand assembly's K-loop decrement was tested as the source of the back-edge
