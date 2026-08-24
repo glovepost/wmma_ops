@@ -3846,6 +3846,10 @@ TFLOPS but failed exactness with normalized error 1.356285863 and cosine
 -0.000246312. The K2 address contract is block/K-major; slice-major packing is
 not compatible.
 
+The delta-2 control was rechecked on the current host at 48.911 TFLOPS with
+exact output (20 warmups, 100 iterations per timing block). It remains inside
+the established qualification band and is not a new record.
+
 The half-word LDS swizzle companion was exact at two-block occupancy but
 reached only 38.402 TFLOPS. This layout permutation is also closed; further
 progress needs a new packed producer rather than another swizzle.

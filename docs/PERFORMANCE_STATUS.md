@@ -964,6 +964,11 @@ the full reference (normalized error 1.356285863, cosine -0.000246312), so the
 kernel’s address contract is specifically block/K-major. Slice-major packing
 is rejected.
 
+The retained delta-2 control was rechecked after the corrected K32 screens on
+the current host: 48.911 TFLOPS in a 20-warmup/100-iteration five-block run,
+exact output. This is consistent with the established 48.980--49.035
+qualification band and does not change the promotion gate.
+
 The companion `WMMA_BP_HALF_SWIZZLE=1` layout was also screened on the same
 256x128 packed shape. It passed the complete exactness tuple at unchanged
 two-block occupancy, but reached only 38.402 TFLOPS. Half-word LDS swizzling is
