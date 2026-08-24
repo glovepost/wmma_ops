@@ -3835,3 +3835,7 @@ at 44.350 TFLOPS but failed exactness (normalized error 1.356285863, cosine
 41.345 TFLOPS. The current K32 staging contract is therefore not competitive;
 a future attempt would need a new packed-layout design rather than another
 ring variant.
+
+The half-word LDS swizzle companion was exact at two-block occupancy but
+reached only 38.402 TFLOPS. This layout permutation is also closed; further
+progress needs a new packed producer rather than another swizzle.

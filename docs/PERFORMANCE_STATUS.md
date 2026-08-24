@@ -951,3 +951,8 @@ maximum error 1.356285863, cosine -0.000246312), indicating an incompatible
 packing/accumulator contract in the generic K2 path. The dedicated K2 ring
 variant repaired exactness, but reached only 41.345 TFLOPS. K32 staging does
 not expose a route toward 50 TFLOPS without a new packing implementation.
+
+The companion `WMMA_BP_HALF_SWIZZLE=1` layout was also screened on the same
+256x128 packed shape. It passed the complete exactness tuple at unchanged
+two-block occupancy, but reached only 38.402 TFLOPS. Half-word LDS swizzling is
+therefore closed as a standalone data-movement optimization.
