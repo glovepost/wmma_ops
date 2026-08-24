@@ -1276,3 +1276,11 @@ rejected it because the descriptor rewrite is tied to the p8 address pattern;
 the unpatched source image remained exact at two blocks/16 waves but reached
 44.993 TFLOPS in a 10/10 screen. Removing B padding without a new hand
 descriptor is therefore closed.
+
+The corrected DPP vector epilogue was then combined with the delta-2 hand
+schedule. The source epilogue allocates a different 117-VGPR register map, so
+the existing progressive-refill patch has no matching handoff. A direct
+two-register phase shift was attempted with the adjusted allocation, but the
+gfx1151 assembler rejected dual-VALU operands for VGPR bank conflicts. No
+combined image was loadable; the standalone hand schedule and source DPP path
+remain separate.

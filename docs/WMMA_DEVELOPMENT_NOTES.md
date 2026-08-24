@@ -4070,3 +4070,10 @@ The p8-specific hand patch correctly refused the changed descriptor pattern,
 and the source-only A8/B0 image was exact but reached 44.993 TFLOPS in a 10/10
 screen. This mixed layout is closed until a separate hand descriptor generator
 exists.
+
+The corrected DPP vector epilogue was also combined with the delta-2 hand
+schedule. Its source allocation is 117 VGPR rather than the hand image's 118,
+and the handoff patch has no matching descriptor. Adjusting the register-phase
+tool to that allocation produced dual-VALU VGPR-bank conflicts rejected by the
+gfx1151 assembler. This combined path produced no loadable image and is not a
+performance result.
