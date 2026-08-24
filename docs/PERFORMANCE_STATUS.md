@@ -1349,3 +1349,27 @@ floor 93.445); the two-slice controls were 91.640, 91.208, 91.514, 91.397,
 and 90.460 (average 91.244). The earlier bracket contained one 84.765 TOPS
 candidate outlier and is not used for promotion. Four-slice residency is now
 the best qualified IU4 GEMM, but remains separate from the 49.035 FP16 goal.
+
+### 2026-08-24 instruction-fetch phase and WGP placement screens
+
+The retained delta-2 K loop starts at device offset `0x5b0`, with its first
+WMMA at `0x608`. A bounded assembly sweep moved the loop header to the next
+64- and 128-byte boundaries and sampled the other 64-byte instruction-fetch
+phases with one-time `s_nop` padding before the back-edge target. No padding
+was inserted in the repeated K-loop body. Every image retained 120 VGPR,
+22 SGPR, 18 KiB LDS, two blocks/16 waves, and reproduced the exact reference
+tuple. The phase candidates reached 49.355--49.677 TFLOPS between 49.444 and
+49.694-TFLOPS controls; the spread followed run order rather than fetch phase,
+and no candidate crossed 50 TFLOPS. Fetch placement is closed as a standalone
+gain. `build-hot-loop-align.sh`, `tools/align_hot_loop_asm.py`, and
+`tools/pad_hot_loop_asm.py` reproduce the screen.
+
+The same instruction image was then changed from CU to WGP placement only in
+its code-object descriptor. WGP mode remained exact and exposed three active
+blocks/24 waves per CU according to the occupancy query, but reached only
+**47.406 TFLOPS** between exact CU controls at 49.442 and 49.526 TFLOPS.
+Distributing an LDS-sharing eight-wave workgroup over all four SIMD32s adds
+more synchronization/data-sharing cost than its extra residency repays. The
+49.035-TFLOPS qualified leader therefore remains in CU mode.
+`build-wgp-mode.sh` and `tools/set_workgroup_mode_asm.py` preserve this
+negative result as a reproducible placement experiment.

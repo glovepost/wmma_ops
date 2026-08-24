@@ -4129,3 +4129,50 @@ Removing each of the four later `lgkmcnt(0)` waits from the FP16 delta-2 hand
 loop independently produced an image that gfx1151 rejected as `invalid device
 function` at the occupancy query. No invalid image was timed or promoted; the
 waits remain part of the required hand schedule.
+
+### 2026-08-24: instruction-fetch phase and WGP placement
+
+The delta-2 image has no explicit alignment directive on its repeated K loop.
+Object disassembly places the loop header at `0x5b0`, the first ten
+`ds_load_b128` operations at `0x5b0`--`0x5f8`, and the first WMMA at `0x608`.
+`tools/align_hot_loop_asm.py` aligned the header to 64, 128, 256, and 512-byte
+boundaries. The last three all collapse to `0x600`; the 64-byte form begins at
+`0x5c0`. `tools/pad_hot_loop_asm.py` then sampled 8, 24, 40, and 56 bytes of
+one-time SALU padding so the first WMMA visited the remaining phases modulo a
+64-byte fetch line. The padding precedes the loop label and therefore executes
+once per kernel launch, not once per K16 slice.
+
+All aligned and padded images were exact over 16,777,216 FP16 outputs with the
+leader's unchanged normalized maximum error `0.018779343`, RMS
+`0.035428338`, and cosine `0.999977929`. Resources also stayed fixed at
+120 VGPR, 22 SGPR, 18,432 bytes LDS, and two blocks/16 waves. A control/padded
+screen produced:
+
+| Image | Median TFLOPS |
+|---|---:|
+| delta-2 opening control | 49.694 |
+| pad 8 bytes | 49.677 |
+| pad 24 bytes | 49.670 |
+| pad 40 bytes | 49.355 |
+| pad 56 bytes | 49.501 |
+| delta-2 closing control | 49.444 |
+
+The earlier boundary forms were likewise exact at 49.580 (64-byte header) and
+49.550 TFLOPS (128-byte header), below a 49.698 closing control. There is no
+monotonic or repeatable fetch-phase gain, so a long qualification would only
+measure package drift. The original `0x5b0` placement remains selected.
+
+The next screen changed only the two code-object
+`workgroup_processor_mode` declarations from CU mode (`0`) to WGP mode (`1`).
+The device instructions and all resource declarations were byte-for-byte
+unchanged. This allows the eight-wave workgroup to span all four SIMD32s in a
+WGP instead of remaining within one CU. The image stayed exact, and the
+occupancy query rose from two blocks/16 waves to three blocks/24 waves, but its
+median fell to 47.406 TFLOPS between CU controls at 49.442 and 49.526 TFLOPS.
+For this shared-LDS schedule, cross-CU placement makes the two barriers and LDS
+traffic more expensive; occupancy alone is not the limiting metric.
+
+These screens narrow the remaining architecture requirement: preserve CU-local
+data sharing and change useful work across the publication boundaries. Neither
+instruction-fetch cosmetics nor wider WGP distribution hides the measured
+barrier cost.
