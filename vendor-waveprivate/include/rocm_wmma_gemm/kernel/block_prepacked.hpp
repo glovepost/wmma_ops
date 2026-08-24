@@ -100,6 +100,18 @@ namespace rocm_wmma_gemm
 #ifndef WMMA_BP_BUFFER_A_PREFETCH
 #define WMMA_BP_BUFFER_A_PREFETCH 0
 #endif
+#ifndef WMMA_BP_HYBRID_A_PINGPONG
+#define WMMA_BP_HYBRID_A_PINGPONG 0
+#endif
+#ifndef WMMA_BP_HYBRID_A_GROUP_LOADS
+#define WMMA_BP_HYBRID_A_GROUP_LOADS 0
+#endif
+#ifndef WMMA_BP_HYBRID_A_LATE_COMMIT
+#define WMMA_BP_HYBRID_A_LATE_COMMIT 0
+#endif
+#ifndef WMMA_BP_HYBRID_B_PINGPONG
+#define WMMA_BP_HYBRID_B_PINGPONG 0
+#endif
 
 struct block_prepacked_gemm
 {
@@ -123,6 +135,10 @@ struct block_prepacked_gemm
         constexpr int a_tile_elements = block_m * block_k;
         constexpr int b_tile_elements = block_n * block_k;
         constexpr int lds_buffers = WMMA_BP_DOUBLE_BUFFER ? 2 : 1;
+        constexpr int a_lds_buffers
+            = WMMA_BP_HYBRID_A_PINGPONG ? 2 : lds_buffers;
+        constexpr int b_lds_buffers
+            = WMMA_BP_HYBRID_B_PINGPONG ? 2 : lds_buffers;
         constexpr int warp_cols = block_n / (4 * wmma_tile);
         static_assert((block_m == 128 || block_m == 256)
                       && (block_n == 128 || block_n == 256));
@@ -138,11 +154,24 @@ struct block_prepacked_gemm
                               && block_m == 256 && block_n == 128
                               && !WMMA_BP_DOUBLE_BUFFER),
                       "K2 ring specializes N-packed 256x128 single buffering");
+        static_assert(!WMMA_BP_HYBRID_A_PINGPONG
+                          || (WMMA_BP_PACK_N && block_m == 256
+                              && block_n == 128 && !WMMA_BP_DOUBLE_BUFFER
+                              && WMMA_BP_K_SLICES == 1
+                              && warp_tile_m == 4 && !WMMA_BP_HALF_SWIZZLE),
+                      "hybrid A ping-pong specializes N-packed 256x128 K16");
+        static_assert(!WMMA_BP_HYBRID_B_PINGPONG
+                          || (WMMA_BP_PACK_N && block_m == 256
+                              && block_n == 128 && !WMMA_BP_DOUBLE_BUFFER
+                              && !WMMA_BP_HYBRID_A_PINGPONG
+                              && WMMA_BP_K_SLICES == 1
+                              && warp_tile_m == 4 && !WMMA_BP_HALF_SWIZZLE),
+                      "hybrid B ping-pong specializes N-packed 256x128 K16");
         using u16x8 = uint16_t __attribute__((ext_vector_type(8)));
         using i32x4 = int32_t __attribute__((ext_vector_type(4)));
 
-        __shared__ half a_lds[lds_buffers * block_m * stride_a];
-        __shared__ half b_lds[lds_buffers * block_n * stride_b];
+        __shared__ half a_lds[a_lds_buffers * block_m * stride_a];
+        __shared__ half b_lds[b_lds_buffers * block_n * stride_b];
 
         const int tid = static_cast<int>(threadIdx.x);
         const int lane = tid & (warp_size - 1);
@@ -297,6 +326,18 @@ struct block_prepacked_gemm
             asm volatile("s_waitcnt vmcnt(0)" ::: "memory");
             *reinterpret_cast<u16x8*>(b_lds + tid * stride_b) = late_b0;
             *reinterpret_cast<u16x8*>(b_lds + tid * stride_b + 8) = late_b1;
+        };
+        auto commit_b_256 = [&]()
+        {
+            const int b_row = tid >> 1;
+            const int b_half = (tid & 1) * 8;
+            *reinterpret_cast<u16x8*>(
+                b_lds + b_row * stride_b + b_half) = next_b;
+        };
+        auto commit_a_256 = [&]()
+        {
+            *reinterpret_cast<u16x8*>(a_lds + tid * stride_a) = next_a0;
+            *reinterpret_cast<u16x8*>(a_lds + tid * stride_a + 8) = next_a1;
         };
         auto buffer_load_a_128 = [&](const half* next_a,
                                      int vector_byte_offset,
@@ -680,6 +721,169 @@ struct block_prepacked_gemm
             }
         };
 
+        // Hybrid ping-pong keeps the smaller B tile single-buffered and
+        // double-buffers only A.  For p8, an A tile is 12 KiB, so its buffer
+        // displacement is bank-phase neutral and two complete 30-KiB
+        // workgroups still fit in the 64-KiB CU LDS budget.  All current A
+        // fragments are loaded before the B/WMMA loop; the next A tile can
+        // therefore be stored to the inactive buffer after wn=1, overlapping
+        // those two stores with the remaining eight WMMAs.  B retains the
+        // original overwrite barrier and is the only operand committed in the
+        // serial handoff region.
+        auto compute_hybrid_a = [&]<bool do_prefetch>(
+                                     int current_a_buffer,
+                                     int next_a_buffer,
+                                     const half* next_a,
+                                     const half* next_b_ptr)
+        {
+            static_assert(!WMMA_BP_HYBRID_A_PINGPONG
+                              || (WMMA_BP_PACK_N && block_m == 256
+                                  && block_n == 128 && warp_tile_m == 4),
+                          "hybrid A compute specializes the retained geometry");
+            fragment<half, wmma_tile> a_frag[4];
+            #pragma unroll
+            for(int wm = 0; wm < 4; ++wm)
+            {
+                const half* source = a_lds
+                    + current_a_buffer * block_m * stride_a
+                    + (warp_m_base + wm * wmma_tile + half_lane) * stride_a;
+                load_matrix<m_input::matrix_a, m_layout::row_major>(
+                    a_frag[wm], source, stride_a, block_k);
+            }
+
+            #pragma unroll
+            for(int wn = 0; wn < 4; ++wn)
+            {
+                if constexpr(do_prefetch)
+                {
+                    const u16x8* a_vectors
+                        = reinterpret_cast<const u16x8*>(next_a);
+                    const u16x8* b_vectors
+                        = reinterpret_cast<const u16x8*>(next_b_ptr);
+                    if(wn == 0)
+                    {
+                        next_a0 = a_vectors[2 * tid];
+                        if constexpr(WMMA_BP_HYBRID_A_GROUP_LOADS)
+                            next_a1 = a_vectors[2 * tid + 1];
+                    }
+                    else if(wn == 1 && !WMMA_BP_HYBRID_A_GROUP_LOADS)
+                        next_a1 = a_vectors[2 * tid + 1];
+                    if(wn == (WMMA_BP_HYBRID_A_LATE_COMMIT ? 1 : 2))
+                        next_b = b_vectors[tid];
+                }
+
+                fragment<half, wmma_tile> b_frag;
+                const half* source = b_lds
+                    + (warp_n_base + wn * wmma_tile + half_lane) * stride_b;
+                load_matrix<m_input::matrix_b, m_layout::col_major>(
+                    b_frag, source, block_k, stride_b);
+                #pragma unroll
+                for(int wm = 0; wm < 4; ++wm)
+                {
+                    if(wn < 2)
+                        wmma<false>(a_frag[wm], b_frag, c_n[wm][wn]);
+                    else
+                        wmma<true>(a_frag[wm], b_frag, c_n[wm][wn - 2]);
+                }
+                __builtin_amdgcn_sched_barrier(0);
+
+                if constexpr(do_prefetch)
+                {
+                    if(wn == (WMMA_BP_HYBRID_A_LATE_COMMIT ? 2 : 1))
+                    {
+                        // In the ordinary form only the two A operations have
+                        // issued. The late form issues B third, then vmcnt(1)
+                        // retires both older A loads without waiting for B.
+                        if constexpr(WMMA_BP_HYBRID_A_LATE_COMMIT)
+                            asm volatile("s_waitcnt vmcnt(1)" ::: "memory");
+                        else
+                            asm volatile("s_waitcnt vmcnt(0)" ::: "memory");
+                        half* next_a_lds = a_lds
+                            + next_a_buffer * block_m * stride_a;
+                        *reinterpret_cast<u16x8*>(
+                            next_a_lds + tid * stride_a) = next_a0;
+                        *reinterpret_cast<u16x8*>(
+                            next_a_lds + tid * stride_a + 8) = next_a1;
+                    }
+                }
+            }
+        };
+
+        // The asymmetric sibling double-buffers only B.  B is issued before
+        // both A refills; vmcnt(2) therefore waits for that oldest operation
+        // while leaving the two younger A loads in flight.  Its single LDS
+        // store targets the inactive B buffer and overlaps the latter half of
+        // the WMMA cluster.  Only A remains in the serial overwrite handoff.
+        auto compute_hybrid_b = [&]<bool do_prefetch>(
+                                     int current_b_buffer,
+                                     int next_b_buffer,
+                                     const half* next_a,
+                                     const half* next_b_ptr)
+        {
+            static_assert(!WMMA_BP_HYBRID_B_PINGPONG
+                              || (WMMA_BP_PACK_N && block_m == 256
+                                  && block_n == 128 && warp_tile_m == 4),
+                          "hybrid B compute specializes the retained geometry");
+            fragment<half, wmma_tile> a_frag[4];
+            #pragma unroll
+            for(int wm = 0; wm < 4; ++wm)
+            {
+                const half* source = a_lds
+                    + (warp_m_base + wm * wmma_tile + half_lane) * stride_a;
+                load_matrix<m_input::matrix_a, m_layout::row_major>(
+                    a_frag[wm], source, stride_a, block_k);
+            }
+
+            #pragma unroll
+            for(int wn = 0; wn < 4; ++wn)
+            {
+                if constexpr(do_prefetch)
+                {
+                    if(wn == 0)
+                    {
+                        const u16x8* b_vectors
+                            = reinterpret_cast<const u16x8*>(next_b_ptr);
+                        const u16x8* a_vectors
+                            = reinterpret_cast<const u16x8*>(next_a);
+                        next_b = b_vectors[tid];
+                        next_a0 = a_vectors[2 * tid];
+                        next_a1 = a_vectors[2 * tid + 1];
+                    }
+                }
+
+                fragment<half, wmma_tile> b_frag;
+                const half* source = b_lds
+                    + current_b_buffer * block_n * stride_b
+                    + (warp_n_base + wn * wmma_tile + half_lane) * stride_b;
+                load_matrix<m_input::matrix_b, m_layout::col_major>(
+                    b_frag, source, block_k, stride_b);
+                #pragma unroll
+                for(int wm = 0; wm < 4; ++wm)
+                {
+                    if(wn < 2)
+                        wmma<false>(a_frag[wm], b_frag, c_n[wm][wn]);
+                    else
+                        wmma<true>(a_frag[wm], b_frag, c_n[wm][wn - 2]);
+                }
+                __builtin_amdgcn_sched_barrier(0);
+
+                if constexpr(do_prefetch)
+                {
+                    if(wn == 1)
+                    {
+                        // B was issued before the two A loads, so allowing two
+                        // VMEM operations to remain guarantees B is available.
+                        asm volatile("s_waitcnt vmcnt(2)" ::: "memory");
+                        const int b_row = tid >> 1;
+                        const int b_half = (tid & 1) * 8;
+                        *reinterpret_cast<u16x8*>(
+                            b_lds + next_b_buffer * block_n * stride_b
+                                + b_row * stride_b + b_half) = next_b;
+                    }
+                }
+            }
+        };
+
         auto compute_k2 = [&]<bool do_prefetch>(
                               const half* next_a, const half* next_b_ptr)
         {
@@ -832,6 +1036,55 @@ struct block_prepacked_gemm
                 __syncthreads();
             }
             compute_k2.template operator()<false>(nullptr, nullptr);
+        }
+        else if constexpr(WMMA_BP_HYBRID_B_PINGPONG)
+        {
+            int current_b_buffer = 0;
+            for(int k_tile = 0; k_tile < k_tiles - 1; ++k_tile)
+            {
+                const int next_b_buffer = 1 - current_b_buffer;
+                const half* next_a = a_tile + (k_tile + 1) * a_tile_elements;
+                const half* next_b_ptr
+                    = b_tile + (k_tile + 1) * b_tile_elements;
+                compute_hybrid_b.template operator()<true>(
+                    current_b_buffer, next_b_buffer, next_a, next_b_ptr);
+
+                // A alone aliases the operand tile consumed above.  The B
+                // refill has already targeted its inactive buffer.
+                asm volatile("s_waitcnt vmcnt(0)" ::: "memory");
+                __syncthreads();
+                commit_a_256();
+                asm volatile("s_waitcnt lgkmcnt(0)" ::: "memory");
+                __syncthreads();
+                current_b_buffer = next_b_buffer;
+            }
+            compute_hybrid_b.template operator()<false>(
+                current_b_buffer, 0, nullptr, nullptr);
+        }
+        else if constexpr(WMMA_BP_HYBRID_A_PINGPONG)
+        {
+            int current_a_buffer = 0;
+            for(int k_tile = 0; k_tile < k_tiles - 1; ++k_tile)
+            {
+                const int next_a_buffer = 1 - current_a_buffer;
+                const half* next_a = a_tile + (k_tile + 1) * a_tile_elements;
+                const half* next_b_ptr
+                    = b_tile + (k_tile + 1) * b_tile_elements;
+                compute_hybrid_a.template operator()<true>(
+                    current_a_buffer, next_a_buffer, next_a, next_b_ptr);
+
+                // B is the only operand whose destination aliases the tile
+                // consumed above.  Retain the first barrier for that hazard;
+                // A has already been written to the inactive buffer.
+                asm volatile("s_waitcnt vmcnt(0)" ::: "memory");
+                __syncthreads();
+                commit_b_256();
+                asm volatile("s_waitcnt lgkmcnt(0)" ::: "memory");
+                __syncthreads();
+                current_a_buffer = next_a_buffer;
+            }
+            compute_hybrid_a.template operator()<false>(
+                current_a_buffer, 0, nullptr, nullptr);
         }
         else if constexpr(!WMMA_BP_DOUBLE_BUFFER)
         {

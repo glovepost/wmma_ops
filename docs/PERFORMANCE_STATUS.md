@@ -319,6 +319,16 @@ occupancy inference because `.amdhsa_next_free_vgpr` stayed 169 and the runtime
 query was non-monotonic. The 129-VGPR p8 streamed form remains the best
 four-wave candidate; the overall FP16 leader remains 48.614 TFLOPS.
 
+Single-operand ping-pong also failed to advance the leader. Double-buffering
+only A preserves two blocks/16 waves at 127 VGPR and 30 KiB LDS; split,
+grouped, and late-`vmcnt(1)` schedules reached 44.569--44.921 TFLOPS. The
+B-only sibling used 129 VGPR and 24 KiB LDS and reached 45.178/45.202 TFLOPS.
+All were exact, while their bracketed p8 controls reached 47.809--48.082.
+These forms move safe LDS stores into the WMMA cluster but retain both
+workgroup barriers, so the added LDS contention and wait threshold cost more
+than the shorter serial handoff saves. The opt-in implementation leaves the
+default device code instruction-identical.
+
 At 256 GB/s, the corresponding compute-to-memory ridge point is about
 232 FLOP/byte (`59.4e12 / 256e9`), not 106 FLOP/byte. Both inputs should be
 replaced by observed clocks and sustained bandwidth when making a measured

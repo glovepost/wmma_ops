@@ -3314,3 +3314,41 @@ Primary papers:
 - [VeriLocc](https://arxiv.org/abs/2506.17506)
 - [GPU-Tile-Sim](https://arxiv.org/abs/2607.11262)
 - [TileFuse](https://arxiv.org/abs/2606.11357)
+
+### 2026-08-23: Hybrid A-only and B-only ping-pong
+
+Full p8/p8 ping-pong needs 36 KiB LDS and loses the retained kernel's
+two-block residency. Two asymmetric designs were built to preserve residency
+and bank phase while moving only the safe refill stores ahead of the overwrite
+barrier:
+
+- A-only ping-pong uses 30 KiB LDS. The next A tile is stored to its inactive
+  buffer during WMMA; B remains single-buffered and is committed between the
+  two existing barriers.
+- B-only ping-pong uses 24 KiB LDS. B is issued before both A loads,
+  `vmcnt(2)` retires only that oldest operation, and the B store overlaps WMMA;
+  A remains in the serial handoff.
+
+The first A-only compiler form used 151 VGPR because LLVM extended fragment
+and buffer-address lifetimes. A scheduling fence after each four-WMMA B group
+restored 127 VGPR with zero spills. Unrolling the two A-buffer phases as
+compile-time constants instead raised allocation to 177 VGPR and was discarded
+without a GPU run. The B-only form compiled at 129 VGPR. Both use 22 SGPR.
+
+Every timed form reproduced the full rocBLAS tuple and the host API reported
+two blocks/16 waves:
+
+| Form | TFLOPS | Same-pass p8 controls |
+|---|---:|---:|
+| A-only, split loads | 44.921 / 44.619 | 48.082 / 48.079 |
+| A-only, grouped loads | 44.606 / 44.569 | 48.082 / 48.079 |
+| A-only, late `vmcnt(1)` | 44.606 / 44.747 | 48.045 / 47.809 |
+| B-only, `vmcnt(2)` | 45.178 / 45.202 | 47.872 / 48.009 |
+
+Partial ping-pong is therefore closed for this geometry. It preserves
+occupancy, global traffic, and the proven p8 bank phase, but it does not remove
+either barrier. The early LDS writes contend with the 32 fragment reads and
+the extra wait threshold extends the dependency graph. Moving work out of the
+handoff is not useful when it merely moves that work onto the compute path.
+The ordinary default device instructions remain unchanged after normalizing
+the generated HIP CUID and assembly comments.

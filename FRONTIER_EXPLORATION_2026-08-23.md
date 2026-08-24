@@ -564,6 +564,41 @@ counters can establish the mechanism. The 129-VGPR p8 streamed-B form remains
 the best four-wave result at about 45.7 TFLOPS, 5.1% below the retained p8
 leader, and no lower-padding form advances to a longer promotion run.
 
+### Hybrid single-operand ping-pong
+
+The next architecture tested whether the full double buffer was solving too
+much. The retained kernel has a 12-KiB A tile and a 6-KiB B tile. Buffering
+only A therefore uses 30 KiB LDS; buffering only B uses 24 KiB. Both preserve
+two 8-wave blocks in the 64-KiB CU budget, and both buffer displacements are
+bank-phase neutral at p8.
+
+The A-only form loads all current A fragments, streams one B fragment at a
+time, and writes the next A tile to the inactive buffer inside the WMMA
+cluster. Only B remains in the serial overwrite handoff. LLVM initially
+extended fragment lifetimes to 151 VGPR; a scheduling fence after each B group
+restored 127 VGPR, 22 SGPR, and zero spills. Compile-time phase unrolling made
+allocation worse at 177 VGPR and was rejected before GPU use.
+
+Three exact A-only schedules were bracketed. Split A loads reached
+44.921/44.619 TFLOPS, grouped loads reached 44.606/44.569, and a late
+`vmcnt(1)` form--which gives A twelve WMMAs of lead while allowing B to remain
+outstanding--reached 44.606/44.747. Same-pass p8 controls were
+48.082/48.079 and 48.045/47.809 TFLOPS. All candidates reported two
+blocks/16 waves and reproduced the full rocBLAS error tuple.
+
+The B-only sibling issues B before both A loads, uses `vmcnt(2)` to retire only
+that oldest operation, and stores B to its inactive buffer while A stays in
+flight. It compiled at 129 VGPR, 22 SGPR, 24 KiB LDS, and zero spills. It also
+reported two blocks/16 waves and was exact, but reached only 45.178/45.202
+TFLOPS against 47.872/48.009 controls.
+
+This closes partial ping-pong for the retained geometry. Moving one or two LDS
+writes into the compute cluster does not remove either workgroup barrier; it
+adds an extra wait threshold and competes with the 32 fragment reads. The
+result is a 5.8--7.3% regression even though occupancy, p8 bank phase, global
+traffic, and arithmetic are unchanged. The experiment remains opt-in and the
+default device code is instruction-identical after CUID/comment normalization.
+
 ## Decision
 
 The correct block/K-major p8 kernel materially exceeds the original-layout
