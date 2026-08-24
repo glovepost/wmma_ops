@@ -767,6 +767,16 @@ terminated with an unspecified launch failure before the exactness gate. It
 has no valid timing result and remains closed until the fragment loader is
 redesigned rather than patched in place.
 
+### 2026-08-24 FP32-accumulator arithmetic screen
+
+The same 256x128 block/K16-prepacked dataflow was rebuilt with the hardware
+FP32-accumulator WMMA instruction and an explicit FP32-to-FP16 output
+conversion. It retained two blocks/16 waves and passed the complete reference
+tuple, but reached 47.922 TFLOPS in the source screen. The arithmetic change
+therefore costs about 2.3% versus the 49.035-TFLOPS FP16-accumulator leader;
+precision alone does not provide the missing headroom. The temporary source
+override and binary were removed.
+
 ### 2026-08-24 source-level raw-buffer prefetch screen
 
 The transposed refill path was regenerated from source with raw-buffer loads

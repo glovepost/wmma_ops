@@ -1094,6 +1094,12 @@ the complete half-wave tile, but the candidate still failed at launch before
 validation. This is a loader/fragment contract failure, not a throughput
 measurement; the partition remains closed pending a redesign.
 
+The arithmetic path was also isolated: a source-level 256x128 block used
+FP32-accumulator WMMA (`v_wmma_f32_16x16x16_f16`) followed by explicit FP16
+conversion. It retained two-block/16-wave occupancy, passed the full exactness
+tuple, and reached 47.922 TFLOPS. This is below the FP16-accumulator leader,
+so the precision-only architecture is closed.
+
 ## Decision
 
 The correct block/K-major p8 kernel with progressive refill, scalar-offset

@@ -32,6 +32,12 @@ to cover the full tile, but the aligned candidate still hit an unspecified
 launch failure before validation. This confirms a deeper fragment/loader
 contract issue; no timing is recorded and no patch is retained.
 
+An independent arithmetic experiment changed only the accumulator type: the
+source used `v_wmma_f32_16x16x16_f16` and converted each output fragment to
+FP16. It kept the 256x128, two-block/16-wave resource class and passed the full
+reference tuple, but measured 47.922 TFLOPS. The FP32 WMMA path is correct but
+slower than the retained FP16-accumulator schedule, so it is not promoted.
+
 # Code organization plan for `wmma_gemm.hip`
 
 This document outlines logical chunks of code that can be extracted into separate header files to improve maintainability and organization.
