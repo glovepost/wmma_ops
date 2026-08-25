@@ -4446,3 +4446,85 @@ period from 16 to 15; the second preserves 16 M tiles and still loses, so that
 confound does not rescue the hypothesis. The scheduler/cache behavior is not
 the simple equal-block round model. Do not build a fractional 4096 tail kernel
 from the theoretical 1.54% figure; the measured direction is negative.
+
+### 2026-08-24: cross-workgroup phase and priority partitioning
+
+The retained image has two resident eight-wave workgroups per CU, while its
+separate profiler pass attributes about 17.2% of wave cycles to barrier wait.
+This suggested that consecutive workgroups might enter their independent
+barriers in phase. The current RDNA 3.5 XML confirms that `S_SLEEP` is a legal
+wave-control instruction and that `S_SETPRIO` changes wave user priority.
+
+`tools/phase_skew_workgroups_asm.py` computes
+`(workgroup_id / 40) & 1` with exact unsigned magic-number division and uses
+the otherwise-dead entry value of `s19`. It delays alternate 40-workgroup
+scheduling rounds once, before the prologue. Sleep immediates 1/2/4/8/16 all
+kept 120 VGPR, 22 SGPR, 18 KiB LDS, two blocks/16 waves, and the complete
+reference tuple. The shallowest delay produced the only short signal at
+49.416 TFLOPS, but six order-swapped 20-warmup/100-iteration pairs rejected
+it: the candidate averaged 49.058 TFLOPS versus 49.098 for the selected image
+and won only two pairs. Raw outputs are
+`/root/wmma-results/phase-skew-screen-20260824.txt` (SHA-256
+`52315c8734fd5dc4585c6c635db7e79e26847906ec8f24c3fc06f1c249bc329e`)
+and `/root/wmma-results/phase-skew-qualify-20260824.txt` (SHA-256
+`8389ff4180a78bcf17e3b0a0bc730bdbb587d1da4fd1fe7048833ffcf32f1270`).
+
+The persistent-priority sibling used the same classifier and resource tuple.
+Giving the first residency round priority 1 reached only 46.802 TFLOPS;
+prioritizing the second reached 48.959, against opening/closing controls at
+49.533/49.521. Every result was exact. Fair arbitration already hides useful
+latency, and deliberately dephasing or prioritizing co-resident workgroups is
+closed. `build-workgroup-phase-skew.sh` and `build-workgroup-priority.sh`
+reproduce the images. The priority raw output is
+`/root/wmma-results/asymmetric-priority-screen-20260824.txt` (SHA-256
+`6ef508b7a0537d6f6f38071eeabea9e8143143624cf3cc06e5b97eb2858f48f3`).
+
+### 2026-08-24: pair-lane DPP-packed output
+
+The verified gfx1151 accumulator mapping assigns adjacent output columns to
+the same accumulator register in adjacent lanes. The XML also confirms a DPP
+encoding for `V_PACK_B32_F16`. `WMMA_BP_PAIR_LANE_EPILOGUE` therefore has every
+lane execute a `row_xmask:1` pack and lets odd lanes write the even/odd pair as
+one aligned dword. Computing the DPP source under the odd-lane mask was first
+rejected by the numerical gate because the even-lane temporary was undefined;
+moving the pack before the mask restored the leader's exact error tuple.
+
+Grouping eight packs under one store mask and passing half operands directly
+removed 128 integer extracts. The final source uses 128 DPP packs and 128
+`global_store_b32` instructions, 119 VGPR, 20 SGPR, and 18 KiB LDS. It reached
+46.636 TFLOPS between selected-image controls at 49.300 and 49.398. The key
+lesson is that pairing lanes halves active memory transactions, not static
+wave-level store instructions: the scalar epilogue also contains 128 store
+instructions. The added DPP work therefore cannot repay itself. The earlier
+correct extract and grouped-mask forms reached 45.563 and 45.993 TFLOPS.
+`build-pair-lane-epilogue.sh` reproduces the final exact source. Its raw output
+is `/root/wmma-results/pair-lane-epilogue-screen4-20260824.txt` (SHA-256
+`41a659e89a94284cfcfe1614c572f27f906850ce38e8c7c7e09a2aaed4f9fd22`).
+
+### 2026-08-24: inter-fragment LDS bank phases
+
+At p8, each 16-row operand fragment occupies 768 bytes, which is zero modulo
+the 128-byte LDS bank period. `WMMA_BP_FRAGMENT_SKEW_A/B` adds a physical gap
+between 16-row groups while retaining contiguous b128 rows. This is distinct
+from the previously tested whole-operand base shifts and uniform row padding:
+it deliberately assigns different WMMA fragments different bank phases.
+
+All six skew forms reproduced the complete full-output tuple. Their short
+source results were:
+
+| Physical group gap (half elements) | VGPR | LDS | TFLOPS |
+|---|---:|---:|---:|
+| A8 / B0 | 133 | 18,688 B | 37.724 |
+| A16 / B0 | 144 | 18,944 B | 45.562 |
+| A0 / B8 | 133 | 18,560 B | 37.870 |
+| A0 / B16 | 119 | 18,688 B | 47.444 |
+| A8 / B8 | 136 | 18,816 B | 40.534 |
+| A16 / B16 | 134 | 19,200 B | 40.599 |
+
+The source controls reached 48.286 and 48.427 TFLOPS. Most forms force LLVM
+to retain several independent LDS address bases, explaining their large VGPR
+and throughput cost; even B16, the lone 119-VGPR form, loses almost one TFLOPS.
+The aligned common fragment phase is beneficial for this schedule and remains
+selected. `build-fragment-phase-skew.sh` reproduces the sweep. Raw output is
+`/root/wmma-results/fragment-phase-skew-screen-20260824.txt` (SHA-256
+`b9c3c86cbaae3fccc4eb6634e9b5a59787650df95181d8839c6bd6f718dd65ff`).

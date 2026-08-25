@@ -91,6 +91,15 @@ namespace rocm_wmma_gemm
 #ifndef WMMA_BP_VECTOR_EPILOGUE
 #define WMMA_BP_VECTOR_EPILOGUE 0
 #endif
+#ifndef WMMA_BP_PAIR_LANE_EPILOGUE
+#define WMMA_BP_PAIR_LANE_EPILOGUE 0
+#endif
+#ifndef WMMA_BP_FRAGMENT_SKEW_A
+#define WMMA_BP_FRAGMENT_SKEW_A 0
+#endif
+#ifndef WMMA_BP_FRAGMENT_SKEW_B
+#define WMMA_BP_FRAGMENT_SKEW_B 0
+#endif
 #ifndef WMMA_BP_FULL_TILE_STORE
 #define WMMA_BP_FULL_TILE_STORE 0
 #endif
@@ -138,6 +147,10 @@ struct block_prepacked_gemm
         constexpr int block_k = WMMA_BP_K_SLICES * wmma_tile;
         constexpr int stride_a = block_k + WMMA_BP_PADDING_A;
         constexpr int stride_b = block_k + WMMA_BP_PADDING_B;
+        constexpr int a_lds_tile_elements = block_m * stride_a
+            + (block_m / wmma_tile) * WMMA_BP_FRAGMENT_SKEW_A;
+        constexpr int b_lds_tile_elements = block_n * stride_b
+            + (block_n / wmma_tile) * WMMA_BP_FRAGMENT_SKEW_B;
         constexpr int a_tile_elements = block_m * block_k;
         constexpr int b_tile_elements = block_n * block_k;
         constexpr int lds_buffers = WMMA_BP_DOUBLE_BUFFER ? 2 : 1;
@@ -149,6 +162,14 @@ struct block_prepacked_gemm
         static_assert((block_m == 128 || block_m == 256)
                       && (block_n == 128 || block_n == 256));
         static_assert(WMMA_BP_K_SLICES == 1 || WMMA_BP_K_SLICES == 2);
+        static_assert((WMMA_BP_FRAGMENT_SKEW_A == 0
+                       && WMMA_BP_FRAGMENT_SKEW_B == 0)
+                          || (WMMA_BP_PACK_N && block_m == 256
+                              && block_n == 128 && block_k == wmma_tile
+                              && !WMMA_BP_DOUBLE_BUFFER
+                              && !WMMA_BP_HALF_SWIZZLE
+                              && warp_tile_m == 4),
+                      "fragment skew specializes N-packed 256x128 K16 p8");
         static_assert(!WMMA_BP_WARP_TILE2_REPAIR
                           || (WMMA_BP_PACK_N && block_m == 128
                               && block_n == 128 && warp_tile_m == 2
@@ -187,8 +208,8 @@ struct block_prepacked_gemm
         using u16x8 = uint16_t __attribute__((ext_vector_type(8)));
         using i32x4 = int32_t __attribute__((ext_vector_type(4)));
 
-        __shared__ half a_lds[a_lds_buffers * block_m * stride_a];
-        __shared__ half b_lds[b_lds_buffers * block_n * stride_b];
+        __shared__ half a_lds[a_lds_buffers * a_lds_tile_elements];
+        __shared__ half b_lds[b_lds_buffers * b_lds_tile_elements];
 
         const int tid = static_cast<int>(threadIdx.x);
         const int lane = tid & (warp_size - 1);
@@ -291,8 +312,10 @@ struct block_prepacked_gemm
                 }
                 else
                 {
-                    *reinterpret_cast<u16x8*>(a_lds + tid * stride_a) = next_a0;
-                    *reinterpret_cast<u16x8*>(a_lds + tid * stride_a + 8) = next_a1;
+                    const int a_offset = tid * stride_a
+                        + (tid >> 4) * WMMA_BP_FRAGMENT_SKEW_A;
+                    *reinterpret_cast<u16x8*>(a_lds + a_offset) = next_a0;
+                    *reinterpret_cast<u16x8*>(a_lds + a_offset + 8) = next_a1;
                 }
             }
             else
@@ -334,8 +357,10 @@ struct block_prepacked_gemm
                     const int physical_half = WMMA_BP_HALF_SWIZZLE
                         ? (b_half ^ (((b_row >> 2) & 1) * 8))
                         : b_half;
+                    const int b_offset = b_row * stride_b
+                        + (b_row >> 4) * WMMA_BP_FRAGMENT_SKEW_B;
                     *reinterpret_cast<u16x8*>(
-                        b_lds + b_row * stride_b + physical_half) = next_b;
+                        b_lds + b_offset + physical_half) = next_b;
                 }
             }
         };
@@ -620,8 +645,11 @@ struct block_prepacked_gemm
                 #pragma unroll
                 for(int wm = 0; wm < warp_tile_m; ++wm)
                 {
+                    const int a_row
+                        = warp_m_base + wm * wmma_tile + half_lane;
                     const half* source = a_lds
-                        + (warp_m_base + wm * wmma_tile + half_lane) * stride_a;
+                        + a_row * stride_a
+                        + (a_row >> 4) * WMMA_BP_FRAGMENT_SKEW_A;
                     if constexpr(WMMA_BP_HALF_SWIZZLE)
                         load_half_swizzled(
                             a_frag[wm],
@@ -764,8 +792,11 @@ struct block_prepacked_gemm
                         }
 
                         fragment<half, wmma_tile> b_frag;
+                        const int b_row
+                            = warp_n_base + wn * wmma_tile + half_lane;
                         const half* source = b_lds
-                            + (warp_n_base + wn * wmma_tile + half_lane) * stride_b;
+                            + b_row * stride_b
+                            + (b_row >> 4) * WMMA_BP_FRAGMENT_SKEW_B;
                         if constexpr(WMMA_BP_HALF_SWIZZLE)
                             load_half_swizzled(
                                 b_frag,
@@ -1592,6 +1623,50 @@ struct block_prepacked_gemm
         };
 #endif
 
+#if WMMA_BP_PAIR_LANE_EPILOGUE
+        // gfx1151 assigns adjacent output columns to adjacent lanes for a
+        // fixed accumulator register.  Execute the store on odd lanes: DPP
+        // supplies the even lane as src0 (the low output half), while the
+        // local odd lane remains src1 (the high output half).  This replaces
+        // two scalar half stores with one packed dword store without the full
+        // 8x8 transpose required by the b128 vector epilogue above.
+        auto store_pair_lane_tile = [&]<bool opsel>(
+                                        fragment<half, wmma_tile>& frag,
+                                        int tile_row,
+                                        int tile_col)
+        {
+            static_assert(WMMA_BP_PACK_N,
+                          "pair-lane epilogue expects N-packed accumulators");
+            static_assert(block_m == 256 && block_n == 128,
+                          "pair-lane epilogue is fixed to the record tile");
+            uint32_t packed[8];
+            #pragma unroll
+            for(int i = 0; i < 8; ++i)
+            {
+                const half own = frag.get()[2 * i + (opsel ? 1 : 0)];
+                // This instruction must execute in the even source lanes as
+                // well as the odd store lanes.  Masking before the DPP gather
+                // leaves the cross-lane temporary undefined.
+                asm volatile(
+                    "v_pack_b32_f16 %0, %1, %1 row_xmask:1 row_mask:0xf bank_mask:0xf bound_ctrl:0"
+                    : "=v"(packed[i])
+                    : "v"(own));
+            }
+            if((lane & 1) != 0)
+            {
+                #pragma unroll
+                for(int i = 0; i < 8; ++i)
+                {
+                    const int output_row = tile_row + 2 * i + (lane >> 4);
+                    const int output_col = tile_col + (lane & 15) - 1;
+                    *reinterpret_cast<uint32_t*>(
+                        C + static_cast<size_t>(output_row) * N + output_col)
+                        = packed[i];
+                }
+            }
+        };
+#endif
+
 #if WMMA_BP_FULL_TILE_STORE
         // The fixed-shape benchmark is exactly divisible by the packed tile.
         // Keep this specialization source-defined rather than deleting the
@@ -1616,7 +1691,18 @@ struct block_prepacked_gemm
             #pragma unroll
             for(int wn = 0; wn < 4; ++wn)
             {
-#if WMMA_BP_VECTOR_EPILOGUE
+#if WMMA_BP_PAIR_LANE_EPILOGUE
+                if(wn < 2)
+                    store_pair_lane_tile.template operator()<false>(
+                        c_n[wm][wn],
+                        block_row + warp_m_base + wm * wmma_tile,
+                        block_col + warp_n_base + wn * wmma_tile);
+                else
+                    store_pair_lane_tile.template operator()<true>(
+                        c_n[wm][wn - 2],
+                        block_row + warp_m_base + wm * wmma_tile,
+                        block_col + warp_n_base + wn * wmma_tile);
+#elif WMMA_BP_VECTOR_EPILOGUE
                 if(wn < 2)
                     store_vector_tile.template operator()<false>(
                         c_n[wm][wn],

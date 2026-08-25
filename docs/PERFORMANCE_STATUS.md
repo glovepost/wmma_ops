@@ -1574,3 +1574,38 @@ not justified. Raw outputs are
 `991afd2ea95963c04d6ef76c2f1c63eedc2cd49304d979ec4d561bb0e9a2958f`) and
 `/root/wmma-results/tail-grid-n-diagnostic-20260824.txt` (SHA-256
 `bce6d6eb05fa13bde643f6d5d3f3d86e6abcc5a6b8990050d44ed759e2914f6a`).
+
+The next synchronization experiment partitioned workgroups by
+`(blockIdx.x / 40) & 1`, using exact scalar magic-number division in the
+otherwise-dead entry lifetime of `s19`. AMD's 2026-08-06 RDNA 3.5 XML confirms
+both `S_SLEEP` and `S_SETPRIO`. One-time sleep depths 1/2/4/8/16 and persistent
+priority partitions retained the leader's 120-VGPR/22-SGPR/18-KiB resource
+tuple and exact output. The promising sleep-1 screen did not qualify: six
+order-swapped long pairs averaged 49.058 TFLOPS for the skew and 49.098 for
+the leader, with only two candidate wins. Giving priority 1 to the first or
+second nominal residency round reached 46.802 and 48.959 TFLOPS against
+49.533/49.521 controls. Cross-workgroup phase manipulation is closed; fair
+hardware arbitration is better. Raw qualification SHA-256 is
+`8389ff4180a78bcf17e3b0a0bc730bdbb587d1da4fd1fe7048833ffcf32f1270`.
+
+Two LDS/output dataflow experiments also remained below the selected image.
+First, a new exact pair-lane epilogue used the XML-supported DPP form of
+`V_PACK_B32_F16`: odd lanes gather the adjacent even-lane accumulator value
+and write an aligned dword. Direct half operands removed all 128 extraction
+instructions, but the final 119-VGPR source reached only 46.636 TFLOPS versus
+49.300/49.398 controls. Pairing lanes halves active memory transactions, not
+the 128 static wave-level store instructions, and adds 128 DPP packs. Raw
+SHA-256 is
+`41a659e89a94284cfcfe1614c572f27f906850ce38e8c7c7e09a2aaed4f9fd22`.
+
+Second, physical 8- or 16-half gaps between 16-row LDS fragments gave A and B
+fragments different bank phases while preserving b128 row transfers. All six
+A-only, B-only, and combined layouts were exact. They reached 37.724--47.444
+TFLOPS against 48.286/48.427 source controls; B16 was best at 119 VGPR, while
+the other layouts needed 133--144 VGPR to retain independent address bases.
+The original 768-byte, bank-period-aligned fragment spacing remains selected.
+Raw SHA-256 is
+`b9c3c86cbaae3fccc4eb6634e9b5a59787650df95181d8839c6bd6f718dd65ff`.
+
+None of these results changes the qualified **49.143-TFLOPS** research leader
+or the requirement for five fresh exact process medians above 50 TFLOPS.
