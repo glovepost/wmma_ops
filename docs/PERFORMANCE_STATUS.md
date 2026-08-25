@@ -1491,3 +1491,20 @@ outputs are `/root/wmma-results/bfrag-pipeline-screen-20260824.txt` (SHA-256
 `803b3dac3529abffd0bd9130a08aa93053947514b1a9df67705ed5bb755c3c9a`) and
 `/root/wmma-results/bfrag-pipeline-cap2-screen-20260824.txt` (SHA-256
 `2a74aa5c40f5b61ed155f8e87ca3ba02feaf12adde3a6850bd98994834581142`).
+
+AMD's 2026-08-06 RDNA 3.5 XML defines `S_CLAUSE` length as
+`SIMM16[5:0] + 1`, so the leader's `s_clause 0x1` deliberately gives the two A
+global-refill loads uninterrupted service while leaving the third B load
+outside. Exact short controls tested a three-load clause, a same-size `s_nop`,
+and deletion. They reached 49.545, 49.461, and 49.568 TFLOPS, bracketed by
+49.378/49.283 controls, making deletion look attractive.
+
+Six alternating-order 20-warmup/100-iteration pairs rejected that short
+signal. Clause-free candidate medians were 48.929, 48.888, 48.953, 49.085,
+49.201, and 48.971 TFLOPS (49.004 average); controls were 49.299, 49.116,
+48.951, 49.134, 48.985, and 48.944 (49.072 average). The exact candidate lost
+0.067 TFLOPS on average. The two-load clause remains selected. Raw outputs are
+`/root/wmma-results/refill-clause-screen-20260824.txt` (SHA-256
+`51f3c59d6feeaa1da3c4b3aaad2ad05bacdf632e264de1cbdf05619139bdee1b`) and
+`/root/wmma-results/refill-clause-qualification-20260824.txt` (SHA-256
+`c0d4133bed5a18b95e257515301cab92be0898be097c6523670c4bf693133942`).

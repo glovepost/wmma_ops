@@ -4331,3 +4331,25 @@ extra waves account for only 0.29 TFLOPS of the loss; the extended B live range
 and deeper LDS queue are themselves slower than the leader's just-in-time
 fragment loads. `build-bfrag-pipeline.sh` reproduces both controls. Do not
 promote or extend this pipeline without new counter evidence.
+
+### 2026-08-24: global-refill clause boundary
+
+The machine-readable RDNA 3.5 XML says a clause contains
+`SIMM16[5:0] + 1` instructions and must contain between two and 63 operations
+of one type. Thus `s_clause 0x1` in the leader covers exactly the two A
+`buffer_load_b128` operations. The following B load is intentionally not in
+the clause. `tools/patch_refill_clause_asm.py` tested three controlled forms:
+`0x2` for all three loads, `s_nop 0` to retain instruction size without a
+clause, and deletion to remove the hot-loop SALU entirely.
+
+All forms were exact and kept 120 VGPR, 22 SGPR, 18 KiB LDS, and two blocks/16
+waves. The short bracket favored deletion at 49.568 TFLOPS; all-three reached
+49.545, NOP 49.461, and opening/closing controls 49.378/49.283. That apparent
+gain did not survive the standard long bracket.
+
+Six alternating-order candidate/control pairs averaged 49.004 TFLOPS without
+the clause and 49.072 with the original two-load clause. Candidate range was
+48.888--49.201; control range was 48.944--49.299. The clause-free image lost
+0.067 TFLOPS on average despite remaining exact in every process. Retain
+`s_clause 0x1`; neither instruction deletion nor uninterrupted service for the
+B refill is a promotion. `build-refill-clause.sh` reproduces the screen.
