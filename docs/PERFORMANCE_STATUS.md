@@ -1554,3 +1554,23 @@ set at 2/4/8/16/32. Note that `WMMA_BP_SWIZZLE` controls the workgroup tile
 mapping, not LDS address swizzling. Raw output is
 `/root/wmma-results/mapping-swizzle-small-screen-20260824.txt` (SHA-256
 `92089904bb1ccb3b0160af25651413737fda32d9b100980cd8ddf106b339696e`).
+
+The 4096 grid-tail hypothesis was measured rather than inferred. A 256x128
+tile produces 512 workgroups; dividing them over 40 CUs suggests a 12/13-block
+tail with a nominal 98.46% utilization ceiling. The harness now supports exact
+compile-time rectangular M/N/K dimensions and independently sizes, packs,
+references, and validates A, B, and C. Its unchanged 4096 default rebuilt and
+reproduced the selected full-output tuple.
+
+Two 480-workgroup shapes divisible by 40 were tested with the identical device
+image. The 3840x4096x4096 (15x32 grid) case reached 47.607/47.668 TFLOPS versus
+49.443/49.654 square controls. The complementary 4096x3840x4096 (16x30 grid)
+case reached 47.280/47.673 versus 49.412/49.388 controls. Every output element
+in all eight processes passed the reference. Since removing the nominal tail
+reduces normalized throughput in both orientations, simple 512/40 imbalance
+does not account for the remaining 50-TFLOPS gap; a fractional-tail kernel is
+not justified. Raw outputs are
+`/root/wmma-results/tail-grid-diagnostic-20260824.txt` (SHA-256
+`991afd2ea95963c04d6ef76c2f1c63eedc2cd49304d979ec4d561bb0e9a2958f`) and
+`/root/wmma-results/tail-grid-n-diagnostic-20260824.txt` (SHA-256
+`bce6d6eb05fa13bde643f6d5d3f3d86e6abcc5a6b8990050d44ed759e2914f6a`).

@@ -162,6 +162,15 @@ namespace {
 #ifndef RECORD_PRODUCER_WAVES
 #define RECORD_PRODUCER_WAVES 5
 #endif
+#ifndef RECORD_M
+#define RECORD_M 4096
+#endif
+#ifndef RECORD_N
+#define RECORD_N 4096
+#endif
+#ifndef RECORD_K
+#define RECORD_K 4096
+#endif
 #define RECORD_BLOCK_CONTRACT \
     (RECORD_BLOCK_PREPACKED | RECORD_BLOCK_K2_RING | RECORD_WAVEPRIVATE_A \
      | RECORD_DIRECT_A_SHARED_B | RECORD_PERSISTENT_BLOCK \
@@ -169,7 +178,9 @@ namespace {
      | RECORD_B_RESIDENT | RECORD_DIRECT_B_SHARED_A \
      | RECORD_PAIRED_A_HANDOFF)
 
-constexpr int kSize = 4096;
+constexpr int kM = RECORD_M;
+constexpr int kN = RECORD_N;
+constexpr int kK = RECORD_K;
 constexpr int kWarmupDefault = 200;
 constexpr int kIterationsDefault = 100;
 constexpr int kTimingBlocks = 5;
@@ -228,6 +239,10 @@ constexpr int kBlockK = RECORD_K_SLICES * rocm_wmma_gemm::wmma_tile;
 constexpr int kThreads = RECORD_PRODUCER_CONSUMER
     ? RECORD_PRODUCER_WAVES * rocm_wmma_gemm::warp_size
     : rocm_wmma_gemm::warp_size * RECORD_WARPS_M * RECORD_WARPS_N;
+static_assert(!RECORD_BLOCK_CONTRACT
+                  || (kM % kBlockM == 0 && kN % kBlockN == 0
+                      && kK % kBlockK == 0),
+              "block-contract dimensions must be exact tile multiples");
 
 double median(std::vector<float> values) {
     std::sort(values.begin(), values.end());
@@ -269,13 +284,17 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    constexpr size_t elements = static_cast<size_t>(kSize) * kSize;
-    std::vector<half> host_a(elements);
-    std::vector<half> host_b(elements);
+    constexpr size_t a_elements = static_cast<size_t>(kM) * kK;
+    constexpr size_t b_elements = static_cast<size_t>(kN) * kK;
+    constexpr size_t c_elements = static_cast<size_t>(kM) * kN;
+    std::vector<half> host_a(a_elements);
+    std::vector<half> host_b(b_elements);
     uint32_t state_a = 0x243f6a88u;
     uint32_t state_b = 0x85a308d3u;
-    for (size_t index = 0; index < elements; ++index) {
+    for (size_t index = 0; index < a_elements; ++index) {
         host_a[index] = __float2half(next_input(state_a));
+    }
+    for (size_t index = 0; index < b_elements; ++index) {
         host_b[index] = __float2half(next_input(state_b));
     }
     std::vector<half> original_a;
@@ -286,14 +305,14 @@ int main(int argc, char** argv) {
         constexpr int block_k = kBlockK;
         original_a = host_a;
         original_b = host_b;
-        std::vector<half> packed_a(elements);
-        std::vector<half> packed_b(elements);
-        for (int bm = 0; bm < kSize / block_m; ++bm) {
-            for (int bk = 0; bk < kSize / block_k; ++bk) {
+        std::vector<half> packed_a(a_elements);
+        std::vector<half> packed_b(b_elements);
+        for (int bm = 0; bm < kM / block_m; ++bm) {
+            for (int bk = 0; bk < kK / block_k; ++bk) {
                 for (int m = 0; m < block_m; ++m) {
                     for (int k = 0; k < block_k; ++k) {
                         const size_t packed = RECORD_BLOCK_SLICE_MAJOR
-                            ? ((((static_cast<size_t>(bm) * (kSize / block_k)
+                            ? ((((static_cast<size_t>(bm) * (kK / block_k)
                                       + bk)
                                      * (block_k / rocm_wmma_gemm::wmma_tile)
                                  + k / rocm_wmma_gemm::wmma_tile)
@@ -301,26 +320,26 @@ int main(int argc, char** argv) {
                                 + m)
                                    * rocm_wmma_gemm::wmma_tile
                                + k % rocm_wmma_gemm::wmma_tile)
-                            : (((static_cast<size_t>(bm) * (kSize / block_k)
+                            : (((static_cast<size_t>(bm) * (kK / block_k)
                                     + bk)
                                    * block_m
                                + m)
                                   * block_k
                               + k);
                         const size_t logical =
-                            static_cast<size_t>(bk * block_k + k) * kSize
+                            static_cast<size_t>(bk * block_k + k) * kM
                             + bm * block_m + m;
                         packed_a[packed] = host_a[logical];
                     }
                 }
             }
         }
-        for (int bn = 0; bn < kSize / block_n; ++bn) {
-            for (int bk = 0; bk < kSize / block_k; ++bk) {
+        for (int bn = 0; bn < kN / block_n; ++bn) {
+            for (int bk = 0; bk < kK / block_k; ++bk) {
                 for (int n = 0; n < block_n; ++n) {
                     for (int k = 0; k < block_k; ++k) {
                         const size_t packed = RECORD_BLOCK_SLICE_MAJOR
-                            ? ((((static_cast<size_t>(bn) * (kSize / block_k)
+                            ? ((((static_cast<size_t>(bn) * (kK / block_k)
                                       + bk)
                                      * (block_k / rocm_wmma_gemm::wmma_tile)
                                  + k / rocm_wmma_gemm::wmma_tile)
@@ -328,14 +347,14 @@ int main(int argc, char** argv) {
                                 + n)
                                    * rocm_wmma_gemm::wmma_tile
                                + k % rocm_wmma_gemm::wmma_tile)
-                            : (((static_cast<size_t>(bn) * (kSize / block_k)
+                            : (((static_cast<size_t>(bn) * (kK / block_k)
                                     + bk)
                                    * block_n
                                + n)
                                   * block_k
                               + k);
                         const size_t logical =
-                            static_cast<size_t>(bk * block_k + k) * kSize
+                            static_cast<size_t>(bk * block_k + k) * kN
                             + bn * block_n + n;
                         packed_b[packed] = host_b[logical];
                     }
@@ -346,21 +365,21 @@ int main(int argc, char** argv) {
         host_b.swap(packed_b);
     }
     if constexpr (RECORD_PREPACK_A) {
-        std::vector<half> packed_a(elements);
-        for (int row = 0; row < kSize; ++row) {
-            for (int col = 0; col < kSize; ++col) {
-                packed_a[static_cast<size_t>(row) * kSize + col]
-                    = host_a[static_cast<size_t>(col) * kSize + row];
+        std::vector<half> packed_a(a_elements);
+        for (int row = 0; row < kM; ++row) {
+            for (int col = 0; col < kK; ++col) {
+                packed_a[static_cast<size_t>(row) * kK + col]
+                    = host_a[static_cast<size_t>(col) * kM + row];
             }
         }
         host_a.swap(packed_a);
     }
     if constexpr (RECORD_PREPACK_B) {
-        std::vector<half> packed_b(elements);
-        for (int row = 0; row < kSize; ++row) {
-            for (int col = 0; col < kSize; ++col) {
-                packed_b[static_cast<size_t>(col) * kSize + row]
-                    = host_b[static_cast<size_t>(row) * kSize + col];
+        std::vector<half> packed_b(b_elements);
+        for (int row = 0; row < kK; ++row) {
+            for (int col = 0; col < kN; ++col) {
+                packed_b[static_cast<size_t>(col) * kK + row]
+                    = host_b[static_cast<size_t>(row) * kN + col];
             }
         }
         host_b.swap(packed_b);
@@ -375,26 +394,26 @@ int main(int argc, char** argv) {
     half* device_b = nullptr;
     if (combined_ab) {
         HIP_CHECK(hipMalloc(&allocation_ab,
-                            (2 * elements + offset_a + offset_b)
+                            (a_elements + b_elements + offset_a + offset_b)
                                 * sizeof(*allocation_ab)));
         device_a = allocation_ab + offset_a;
-        device_b = device_a + elements + offset_b;
+        device_b = device_a + a_elements + offset_b;
     } else {
         HIP_CHECK(hipMalloc(&allocation_a,
-                            (elements + offset_a) * sizeof(*allocation_a)));
+                            (a_elements + offset_a) * sizeof(*allocation_a)));
         HIP_CHECK(hipMalloc(&allocation_b,
-                            (elements + offset_b) * sizeof(*allocation_b)));
+                            (b_elements + offset_b) * sizeof(*allocation_b)));
         device_a = allocation_a + offset_a;
         device_b = allocation_b + offset_b;
     }
     HIP_CHECK(hipMalloc(&allocation_c,
-                        (elements + offset_c) * sizeof(*allocation_c)));
+                        (c_elements + offset_c) * sizeof(*allocation_c)));
     half* const device_c = allocation_c + offset_c;
     HIP_CHECK(hipMalloc(&device_reference,
-                        elements * sizeof(*device_reference)));
-    HIP_CHECK(hipMemcpy(device_a, host_a.data(), elements * sizeof(*device_a),
+                        c_elements * sizeof(*device_reference)));
+    HIP_CHECK(hipMemcpy(device_a, host_a.data(), a_elements * sizeof(*device_a),
                         hipMemcpyHostToDevice));
-    HIP_CHECK(hipMemcpy(device_b, host_b.data(), elements * sizeof(*device_b),
+    HIP_CHECK(hipMemcpy(device_b, host_b.data(), b_elements * sizeof(*device_b),
                         hipMemcpyHostToDevice));
 
     // CPU and GPU share the Strix Halo package power envelope. Let the CPU-side
@@ -404,8 +423,8 @@ int main(int argc, char** argv) {
 
     hipStream_t stream = nullptr;
     HIP_CHECK(hipStreamCreate(&stream));
-    const int grid_m = (kSize + kBlockM - 1) / kBlockM;
-    const int grid_n = (kSize + kBlockN - 1) / kBlockN;
+    const int grid_m = (kM + kBlockM - 1) / kBlockM;
+    const int grid_n = (kN + kBlockN - 1) / kBlockN;
     const dim3 grid(RECORD_GRID_BLOCKS > 0
                         ? RECORD_GRID_BLOCKS
                         : grid_m * grid_n);
@@ -427,7 +446,7 @@ int main(int argc, char** argv) {
                            RECORD_DYNAMIC_LDS_BYTES,
                            stream,
                            device_c, device_a, device_b,
-                           kSize, kSize, kSize);
+                           kM, kN, kK);
         HIP_CHECK(hipPeekAtLastError());
     };
 
@@ -455,7 +474,7 @@ int main(int argc, char** argv) {
     }
 
     const double median_ms = median(times_ms);
-    const double operations = 2.0 * kSize * kSize * static_cast<double>(kSize);
+    const double operations = 2.0 * kM * kN * static_cast<double>(kK);
     const double tflops = operations / (median_ms * 1.0e-3) / 1.0e12;
 
     if constexpr (RECORD_BLOCK_CONTRACT) {
@@ -463,9 +482,9 @@ int main(int argc, char** argv) {
         // the original matrices after timing so the independent reference
         // still uses its ordinary column-major-A/row-major-B interface.
         HIP_CHECK(hipMemcpy(device_a, original_a.data(),
-                            elements * sizeof(*device_a), hipMemcpyHostToDevice));
+                            a_elements * sizeof(*device_a), hipMemcpyHostToDevice));
         HIP_CHECK(hipMemcpy(device_b, original_b.data(),
-                            elements * sizeof(*device_b), hipMemcpyHostToDevice));
+                            b_elements * sizeof(*device_b), hipMemcpyHostToDevice));
     }
 
     rocblas_handle handle = nullptr;
@@ -482,21 +501,21 @@ int main(int argc, char** argv) {
         ? rocblas_operation_none : rocblas_operation_transpose;
     ROCBLAS_CHECK(rocblas_gemm_ex(
         handle, op_b, op_a,
-        kSize, kSize, kSize, &alpha,
-        device_b, rocblas_datatype_f16_r, kSize,
-        device_a, rocblas_datatype_f16_r, kSize,
+        kN, kM, kK, &alpha,
+        device_b, rocblas_datatype_f16_r, kN,
+        device_a, rocblas_datatype_f16_r, kM,
         &beta,
-        device_reference, rocblas_datatype_f16_r, kSize,
-        device_reference, rocblas_datatype_f16_r, kSize,
+        device_reference, rocblas_datatype_f16_r, kN,
+        device_reference, rocblas_datatype_f16_r, kN,
         rocblas_datatype_f32_r, rocblas_gemm_algo_standard, 0, 0));
     HIP_CHECK(hipStreamSynchronize(stream));
 
-    std::vector<half> host_c(elements);
-    std::vector<half> host_reference(elements);
-    HIP_CHECK(hipMemcpy(host_c.data(), device_c, elements * sizeof(half),
+    std::vector<half> host_c(c_elements);
+    std::vector<half> host_reference(c_elements);
+    HIP_CHECK(hipMemcpy(host_c.data(), device_c, c_elements * sizeof(half),
                         hipMemcpyDeviceToHost));
     HIP_CHECK(hipMemcpy(host_reference.data(), device_reference,
-                        elements * sizeof(half), hipMemcpyDeviceToHost));
+                        c_elements * sizeof(half), hipMemcpyDeviceToHost));
 
     bool finite = true;
     double max_abs_error = 0.0;
@@ -505,7 +524,7 @@ int main(int argc, char** argv) {
     double dot_product = 0.0;
     double norm_actual = 0.0;
     double norm_reference = 0.0;
-    for (size_t index = 0; index < elements; ++index) {
+    for (size_t index = 0; index < c_elements; ++index) {
         const float actual_float = __half2float(host_c[index]);
         const float expected_float = __half2float(host_reference[index]);
         const double actual = actual_float;
@@ -522,7 +541,7 @@ int main(int argc, char** argv) {
     }
     const double normalized_max_error = max_abs_error
         / std::max(reference_max_abs, 1.0);
-    const double rms_error = std::sqrt(squared_error / elements);
+    const double rms_error = std::sqrt(squared_error / c_elements);
     const double cosine_similarity = dot_product
         / std::sqrt(norm_actual * norm_reference);
     const bool correct = finite && cosine_similarity > 0.995
@@ -530,12 +549,12 @@ int main(int argc, char** argv) {
     const bool promoted = correct && tflops > kPromotionTargetTflops;
 
     std::printf(
-        "config=%d,%d,%d,%d,%d,%d,%d,%d block=%dx%d k=%d cu_mode=1 "
+        "config=%d,%d,%d,%d,%d,%d,%d,%d shape=%dx%dx%d block=%dx%d k=%d cu_mode=1 "
         "warmup=%d timing_blocks=%d iterations_per_block=%d offsets=%zu,%zu,%zu "
         "allocation=%s input_contract=%s pipeline=%s\n",
         RECORD_WARPS_M, RECORD_WARPS_N, RECORD_WARP_TILE_M, RECORD_WARP_TILE_N,
         RECORD_K_SLICES, RECORD_SINGLE_BUFFER, RECORD_SWIZZLE, RECORD_BITS,
-        kBlockM, kBlockN, kBlockK, warmup, kTimingBlocks, iterations,
+        kM, kN, kK, kBlockM, kBlockN, kBlockK, warmup, kTimingBlocks, iterations,
         offset_a, offset_b, offset_c, combined_ab ? "combined-ab" : "separate",
         RECORD_BLOCK_CONTRACT
             ? (RECORD_BLOCK_SLICE_MAJOR
@@ -558,7 +577,7 @@ int main(int argc, char** argv) {
         "validation finite=%s elements=%zu max_abs_error=%.9f "
         "reference_max_abs=%.9f normalized_max_error=%.9f rms_error=%.9f "
         "cosine_similarity=%.9f\n",
-        finite ? "yes" : "no", elements, max_abs_error, reference_max_abs,
+        finite ? "yes" : "no", c_elements, max_abs_error, reference_max_abs,
         normalized_max_error, rms_error, cosine_similarity);
     std::printf("promotion target_tflops=%.3f pass=%s\n",
                 kPromotionTargetTflops, promoted ? "yes" : "no");

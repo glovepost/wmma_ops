@@ -4424,3 +4424,25 @@ LDS-only publication-wait transforms as the selected image. Both candidates
 were exact at 120 VGPR, 22 SGPR, 18 KiB LDS, and two blocks/16 waves. Period 2
 measured 48.534 TFLOPS and period 4 measured 49.375, between period-16 controls
 at 49.701/49.600. The complete tested hand set is now 2/4/8/16/32; retain 16.
+
+### 2026-08-24: 40-CU grid-tail diagnostic
+
+The square launch has 16x32 = 512 workgroups. A naive equal-duration model on
+40 CUs needs 13 scheduling rounds and has `512 / (40 * 13) = 98.46%` tail
+efficiency, close enough to the remaining gap to merit a direct measurement.
+
+`tools/rocwmma_record.hip` now accepts compile-time `RECORD_M`, `RECORD_N`, and
+`RECORD_K`, all defaulting to 4096. A/B/C allocations, deterministic input
+generation, block packing, grid dimensions, operation counts, rocBLAS leading
+dimensions, and full-output validation use their real independent sizes. A
+compile-time guard rejects block-contract shapes that are not exact tile
+multiples. `build-tail-grid-diagnostic.sh` wraps the same selected device image
+with square and rectangular hosts, isolating grid shape from kernel ISA.
+
+Both exact 480-block grids lost normalized throughput. M=3840,N=4096 measured
+47.607/47.668 TFLOPS against 49.443/49.654 square controls. M=4096,N=3840
+measured 47.280/47.673 against 49.412/49.388. The first changes the mapper's M
+period from 16 to 15; the second preserves 16 M tiles and still loses, so that
+confound does not rescue the hypothesis. The scheduler/cache behavior is not
+the simple equal-block round model. Do not build a fractional 4096 tail kernel
+from the theoretical 1.54% figure; the measured direction is negative.
