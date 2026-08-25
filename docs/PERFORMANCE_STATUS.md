@@ -1711,5 +1711,34 @@ method is retained for future mapping experiments; neither 5x8 form advances.
 the result. Raw SHA-256 is
 `629424fcbf89ea95514933ec8bf12e87ac78643f1bb097462a8598047af33fad`.
 
+A new ping-pong architecture then used storage the selected layout had left
+idle. Each p8 A row contains 16 data halfs and eight padding halfs; across 256
+rows, that padding is exactly the 256 b128 half-rows needed by a 128x16 B tile.
+The B halves are embedded with
+`slot(row,h)=((row+2+3h)&7)+8*(2*(row>>3)+h)`. Exhaustive construction proves
+that all 256 slots are unique, and
+`slot*48+32 == row*48+h*16 (mod 128)`, so B retains the selected layout's LDS
+bank phase. Two combined A+B buffers occupy 24 KiB instead of 36 KiB, keeping
+two blocks/16 waves while reducing the hot loop to one monolithic `S_BARRIER`
+per K16 publication. AMD's 2026-08-06 RDNA 3.5 XML confirms that B128 is the
+widest LDS vector and that only the monolithic workgroup barrier is available.
+
+The first exact implementation used 121 VGPR, 22 SGPR, 24 KiB LDS, and reached
+39.291 TFLOPS. Matching the selected progressive A/B wait order raised it to
+39.973. The final address transform exploits
+`slot(row+16,h)=slot(row,h)+32`: all four B fragments share two lane-dependent
+bases and use constant 1,536-byte steps. Emitted ISA contains only those two
+dynamic B bases, uses LDS offsets 0/1536/3072/4608 relative to them, and drops
+to 117 VGPR without scratch. Full-output validation again produced normalized
+maximum error 0.018779343, RMS error 0.035428338, and cosine similarity
+0.999977929.
+
+That optimized form reached 41.798 TFLOPS between selected controls at
+49.406/49.186. Reclaiming a barrier and 12 KiB of double-buffer storage cannot
+repay two noncontiguous LDS reads per B fragment plus their exposed waits. The
+embedded-padding pipeline is therefore closed without long qualification;
+`build-embedded-ab-pingpong.sh` reproduces it. Raw final-screen SHA-256 is
+`d1a9efe242d66568f6c690cb241a8defa2f7f42164acf12a355b9d31d9e076d0`.
+
 None of these results changes the qualified **49.143-TFLOPS** research leader
 or the requirement for five fresh exact process medians above 50 TFLOPS.

@@ -4730,3 +4730,56 @@ retaining the inverse-ID mechanism for other bijective maps.
 `build-workgroup-remap-5x8.sh` reproduces both images. Raw output is
 `/root/wmma-results/workgroup-remap-5x8-screen-20260824.txt` (SHA-256
 `629424fcbf89ea95514933ec8bf12e87ac78643f1bb097462a8598047af33fad`).
+
+### 2026-08-24: embedded-padding A/B ping-pong pipeline
+
+The leader's p8 A layout reserves eight unused half elements after every
+16-half row. Across 256 rows those padding cells hold exactly the 256 b128
+halves of a 128x16 B tile. `embedded_ab_pingpong_gemm` uses the bijection
+
+```
+slot(row, half) = ((row + 2 + 3*half) & 7) + 8*(2*(row >> 3) + half)
+```
+
+to place B inside the A padding. Exhaustive host-side checks show that the 256
+`(row,half)` pairs occupy every slot exactly once. More importantly,
+`slot*48+32 == row*48+half*16 (mod 128)`, preserving the selected p8 B bank
+phase despite the embedding. Each A+B K16 buffer is 12 KiB, so two ping-pong
+buffers use 24 KiB rather than a conventional 36 KiB. This retains two
+blocks/16 waves per CU and permits a single publish barrier: compute reads one
+buffer while the next tile is written to the other.
+
+This construction is consistent with AMD's 2026-08-06 RDNA 3.5 XML. LDS
+operations top out at B128, `S_BARRIER` is monolithic, and no split
+producer/consumer barrier exists on gfx1151. The experiment therefore attacks
+layout capacity rather than assuming a wider LDS transfer or undocumented
+barrier primitive.
+
+The implementation progressed through three exact screens:
+
+| Form | VGPR | TFLOPS | Selected controls |
+|---|---:|---:|---:|
+| Initial embedded ping-pong | 121 | 39.291 | 49.353 / 49.301 |
+| Progressive A/B waits | 121 | 39.973 | 49.373 / 49.564 |
+| Periodic B bases | 117 | 41.798 | 49.406 / 49.186 |
+
+The final form uses the identity `slot(row+16,h)=slot(row,h)+32`. Four B WMMA
+fragments consequently need only two lane-dependent base addresses; later
+fragments are LDS immediate offsets in 1,536-byte increments. Emitted ISA
+confirmed the expected two bases, 117 VGPR, 22 SGPR, 24 KiB LDS, no scratch,
+and one `S_BARRIER` in each loop body. All 16,777,216 outputs reproduced
+normalized maximum error 0.018779343, RMS error 0.035428338, and cosine
+similarity 0.999977929.
+
+The reduced barrier count is not enough. Reconstructing each B fragment from
+two noncontiguous b128 loads lengthens its LDS dependency path, and the final
+candidate remains 15% behind the bracket. This closes the architecture without
+long qualification. `build-embedded-ab-pingpong.sh` reproduces the final
+image. Raw outputs and SHA-256 values are:
+
+- `/root/wmma-results/embedded-ab-pingpong-screen-20260824.txt`:
+  `b4d841699b841e108e25c6647fb2ba2e8ae265d5a3dddd9875d2505682e32ac9`
+- `/root/wmma-results/embedded-ab-pingpong-progressive-screen-20260824.txt`:
+  `8929531fe5d9d49488ea8aa1c0724366cf392347bde1ae0962ae25fcf8fcc5db`
+- `/root/wmma-results/embedded-ab-pingpong-periodic-base-screen-20260824.txt`:
+  `d1a9efe242d66568f6c690cb241a8defa2f7f42164acf12a355b9d31d9e076d0`
