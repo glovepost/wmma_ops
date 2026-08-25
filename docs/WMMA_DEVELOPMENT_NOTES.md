@@ -4669,3 +4669,36 @@ small wait edits cannot plausibly recover the deficit.
 `build-block-192x192-wide.sh` reproduces both images. Raw output is
 `/root/wmma-results/block-192x192-wide-smoke-20260824.txt` (SHA-256
 `3a92f013b2beb20a1fa96bb0516b9b4c633a8babd134d723954345927ad72e92`).
+
+### 2026-08-24: MUBUF cache-policy screen
+
+AMD's 2026-08-06 RDNA 3.5 XML documents three independent cache fields in the
+64-bit `ENC_MUBUF` format: `GLC` is globally coherent, `SLC` is system-level
+coherent, and `DLC` makes L1 coherent across WGPs in a shader engine. The
+selected refill leaves all three clear. Because each packed A tile is consumed
+by 32 column workgroups and each B tile by 16 row workgroups, this screen tested
+whether a coherent policy could expose more useful cross-workgroup reuse.
+
+`tools/patch_cache_policy_asm.py` modifies only the policy bits on the exact
+three-load hot-loop refill. Instruction count, operands, addresses, waits,
+WMMA order, 120 VGPR, 22 SGPR, 18 KiB LDS, and two-block/16-wave residency all
+remain fixed. Every one of the eight bit combinations reproduced normalized
+maximum error 0.018779343, RMS 0.035428338, and cosine 0.999977929.
+
+| MUBUF policy | TFLOPS |
+|---|---:|
+| default (opening / closing) | 49.498 / 49.579 |
+| `GLC` | 49.216 |
+| `SLC` | 48.914 |
+| `DLC` | 45.538 |
+| `GLC+SLC` | 48.308 |
+| `GLC+DLC` | 46.522 |
+| `SLC+DLC` | 28.891 |
+| `GLC+SLC+DLC` | 33.460 |
+
+The ordinary private-cache policy is decisively best. In particular, L1
+coherence is a large penalty rather than a way to share the packed tiles. Keep
+the selected MUBUF encoding unchanged. `build-cache-policy.sh` reproduces all
+forms. Raw output is `/root/wmma-results/cache-policy-screen-20260824.txt`
+(SHA-256
+`0234fcb18c3d5ebb105909b4974838d9efd663202ef1b3a5a46c41cbb294c7be`).

@@ -1676,5 +1676,22 @@ qualification. `build-block-192x192-wide.sh` reproduces both placements. Raw
 SHA-256 is
 `3a92f013b2beb20a1fa96bb0516b9b4c633a8babd134d723954345927ad72e92`.
 
+The selected loop's MUBUF cache policy was then exhaustively screened from
+the RDNA 3.5 XML rather than inferred from another generation. `ENC_MUBUF`
+defines independent `GLC` (globally coherent), `SLC` (system-level coherent),
+and `DLC` (L1 coherent across WGPs in a shader engine) bits. A guarded assembly
+transform changed only those bits on the three refill loads; all eight images
+kept the leader's instruction count, 120 VGPR, 22 SGPR, 18 KiB LDS, two
+blocks/16 waves, and complete exactness tuple.
+
+The unmodified policy won at 49.498/49.579-TFLOPS opening/closing controls.
+`GLC`, `SLC`, and `DLC` reached 49.216, 48.914, and 45.538 TFLOPS. The
+`GLC+SLC`, `GLC+DLC`, `SLC+DLC`, and all-bit forms fell to 48.308, 46.522,
+28.891, and 33.460 TFLOPS. Coherent cache behavior does not improve the
+packed-input reuse pattern; the default MUBUF policy remains selected.
+`build-cache-policy.sh` and `tools/patch_cache_policy_asm.py` reproduce the
+screen. Raw SHA-256 is
+`0234fcb18c3d5ebb105909b4974838d9efd663202ef1b3a5a46c41cbb294c7be`.
+
 None of these results changes the qualified **49.143-TFLOPS** research leader
 or the requirement for five fresh exact process medians above 50 TFLOPS.
