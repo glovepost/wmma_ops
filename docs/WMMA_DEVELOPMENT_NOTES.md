@@ -4293,3 +4293,16 @@ publication barriers. Four resident blocks raise occupancy but double the
 handoff frequency per output element. Future compact-tile work would need to
 amortize multiple K16 slices per publication, not merely reschedule the two
 global refills. `build-warp-tile2-repair.sh` reproduces the exact candidates.
+
+That requirement was tested immediately with a guarded compact K32 extension.
+Each thread stages two `u16x8` vectors per operand into a 128x128x32 tile, and
+`compute_k2` now respects `warp_tile_m` instead of assuming four M fragments.
+The established 256x128 K32 path remains on its original four-A/two-B mapping.
+
+The compact K32 result was exact with the same normalized maximum, RMS, and
+cosine tuple. It compiled to 122 VGPR, 22 SGPR, 20 KiB LDS, no spills, and
+three blocks/24 waves per CU, then measured 43.902 TFLOPS in a
+20-warmup/5x10 screen. Although it halves publication frequency, it loses
+performance relative to compact K16 and the leader. The wider LDS stride plus
+additional live staging and fragment state outweigh the saved barriers.
+`build-warp-tile2-k32.sh` preserves the negative result; do not qualify it.

@@ -152,9 +152,8 @@ struct block_prepacked_gemm
         static_assert(!WMMA_BP_WARP_TILE2_REPAIR
                           || (WMMA_BP_PACK_N && block_m == 128
                               && block_n == 128 && warp_tile_m == 2
-                              && WMMA_BP_K_SLICES == 1
                               && !WMMA_BP_DOUBLE_BUFFER),
-                      "warp-tile-2 repair specializes N-packed 128x128 K16 single buffering");
+                      "warp-tile-2 repair specializes N-packed 128x128 single buffering");
         static_assert(!WMMA_BP_WARP_TILE2_REPAIR
                           || (WMMA_BP_PREFETCH_A0_WN >= 0
                               && WMMA_BP_PREFETCH_A0_WN < 4
@@ -388,36 +387,71 @@ struct block_prepacked_gemm
         auto prefetch_k2 = [&](const half* next_a, const half* next_b_ptr)
         {
             static_assert(WMMA_BP_K_SLICES == 1
-                          || (block_m == 256 && block_n == 128));
+                          || (WMMA_BP_PACK_N && !WMMA_BP_DOUBLE_BUFFER
+                              && ((block_m == 256 && block_n == 128)
+                                  || WMMA_BP_WARP_TILE2_REPAIR)));
             const u16x8* a_vectors = reinterpret_cast<const u16x8*>(next_a);
             const u16x8* b_vectors = reinterpret_cast<const u16x8*>(next_b_ptr);
-            #pragma unroll
-            for(int vector = 0; vector < 4; ++vector)
-                next_a_k2[vector] = a_vectors[4 * tid + vector];
-            #pragma unroll
-            for(int vector = 0; vector < 2; ++vector)
-                next_b_k2[vector] = b_vectors[2 * tid + vector];
+            if constexpr(WMMA_BP_WARP_TILE2_REPAIR)
+            {
+                #pragma unroll
+                for(int vector = 0; vector < 2; ++vector)
+                {
+                    next_a_k2[vector] = a_vectors[2 * tid + vector];
+                    next_b_k2[vector] = b_vectors[2 * tid + vector];
+                }
+            }
+            else
+            {
+                #pragma unroll
+                for(int vector = 0; vector < 4; ++vector)
+                    next_a_k2[vector] = a_vectors[4 * tid + vector];
+                #pragma unroll
+                for(int vector = 0; vector < 2; ++vector)
+                    next_b_k2[vector] = b_vectors[2 * tid + vector];
+            }
         };
 
         auto commit_k2 = [&]()
         {
-            #pragma unroll
-            for(int vector = 0; vector < 4; ++vector)
+            if constexpr(WMMA_BP_WARP_TILE2_REPAIR)
             {
-                const int flat = 4 * tid + vector;
-                const int row = flat >> 2;
-                const int row_vector = flat & 3;
-                *reinterpret_cast<u16x8*>(
-                    a_lds + row * stride_a + row_vector * 8) = next_a_k2[vector];
+                #pragma unroll
+                for(int vector = 0; vector < 2; ++vector)
+                {
+                    const int flat = 2 * tid + vector;
+                    const int row = flat >> 2;
+                    const int row_vector = flat & 3;
+                    *reinterpret_cast<u16x8*>(
+                        a_lds + row * stride_a + row_vector * 8)
+                        = next_a_k2[vector];
+                    *reinterpret_cast<u16x8*>(
+                        b_lds + row * stride_b + row_vector * 8)
+                        = next_b_k2[vector];
+                }
             }
-            #pragma unroll
-            for(int vector = 0; vector < 2; ++vector)
+            else
             {
-                const int flat = 2 * tid + vector;
-                const int row = flat >> 2;
-                const int row_vector = flat & 3;
-                *reinterpret_cast<u16x8*>(
-                    b_lds + row * stride_b + row_vector * 8) = next_b_k2[vector];
+                #pragma unroll
+                for(int vector = 0; vector < 4; ++vector)
+                {
+                    const int flat = 4 * tid + vector;
+                    const int row = flat >> 2;
+                    const int row_vector = flat & 3;
+                    *reinterpret_cast<u16x8*>(
+                        a_lds + row * stride_a + row_vector * 8)
+                        = next_a_k2[vector];
+                }
+                #pragma unroll
+                for(int vector = 0; vector < 2; ++vector)
+                {
+                    const int flat = 2 * tid + vector;
+                    const int row = flat >> 2;
+                    const int row_vector = flat & 3;
+                    *reinterpret_cast<u16x8*>(
+                        b_lds + row * stride_b + row_vector * 8)
+                        = next_b_k2[vector];
+                }
             }
         };
 
@@ -933,15 +967,16 @@ struct block_prepacked_gemm
                               const half* next_a, const half* next_b_ptr)
         {
             static_assert(WMMA_BP_K_SLICES == 1
-                              || (WMMA_BP_PACK_N && block_m == 256
-                                  && block_n == 128 && !WMMA_BP_DOUBLE_BUFFER),
-                          "K2 currently specializes the N-packed 256x128 single buffer");
+                              || (WMMA_BP_PACK_N && !WMMA_BP_DOUBLE_BUFFER
+                                  && ((block_m == 256 && block_n == 128)
+                                      || WMMA_BP_WARP_TILE2_REPAIR)),
+                          "K2 requires a supported N-packed single-buffer geometry");
             #pragma unroll
             for(int slice = 0; slice < 2; ++slice)
             {
                 fragment<half, wmma_tile> a_frag[4];
                 #pragma unroll
-                for(int wm = 0; wm < 4; ++wm)
+                for(int wm = 0; wm < warp_tile_m; ++wm)
                 {
                     const half* source = a_lds
                         + (warp_m_base + wm * wmma_tile + half_lane) * stride_a
@@ -960,10 +995,24 @@ struct block_prepacked_gemm
                             = reinterpret_cast<const u16x8*>(next_a);
                         const u16x8* b_vectors
                             = reinterpret_cast<const u16x8*>(next_b_ptr);
-                        if(step < 4)
-                            next_a_k2[step] = a_vectors[4 * tid + step];
-                        else if(step < 6)
-                            next_b_k2[step - 4] = b_vectors[2 * tid + step - 4];
+                        if constexpr(WMMA_BP_WARP_TILE2_REPAIR)
+                        {
+                            if(step < 2)
+                                next_a_k2[step]
+                                    = a_vectors[2 * tid + step];
+                            else if(step < 4)
+                                next_b_k2[step - 2]
+                                    = b_vectors[2 * tid + step - 2];
+                        }
+                        else
+                        {
+                            if(step < 4)
+                                next_a_k2[step]
+                                    = a_vectors[4 * tid + step];
+                            else if(step < 6)
+                                next_b_k2[step - 4]
+                                    = b_vectors[2 * tid + step - 4];
+                        }
                     }
 
                     fragment<half, wmma_tile> b_frag;
@@ -974,7 +1023,7 @@ struct block_prepacked_gemm
                         b_frag, source, block_k, stride_b);
 
                     #pragma unroll
-                    for(int wm = 0; wm < 4; ++wm)
+                    for(int wm = 0; wm < warp_tile_m; ++wm)
                     {
                         if(wn < 2)
                             wmma<false>(a_frag[wm], b_frag, c_n[wm][wn]);

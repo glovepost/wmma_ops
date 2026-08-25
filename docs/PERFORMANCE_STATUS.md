@@ -1462,3 +1462,14 @@ Raw outputs are `/root/wmma-results/warp-tile2-repair-20260824.txt` (SHA-256
 `8fee79bacb254f8ec3692661a5e6a79aef3192f70220e390eba81ef19fe73f17`) and
 `/root/wmma-results/warp-tile2-prefetch-20260824.txt` (SHA-256
 `c8fb1b74fdae35eb8085e4f297e7789da9dc814c1f8389784e086d5e41e9147a`).
+
+The direct follow-up amortized two K16 slices in one compact K32 publication.
+The guarded path kept the repaired 128x128 ownership, staged two contiguous
+vectors per thread for both operands, and performed both WMMA slices before
+each overwrite handoff. It was full-output exact and admitted three blocks/24
+waves per CU, but the K32 state raised resources to 122 VGPR and 20 KiB LDS.
+Its 20-warmup/5x10 screen reached only 43.902 TFLOPS. Halving the barrier count
+does not repay the wider LDS stride and extra staging/fragment state, so compact
+K32 is also closed without qualification. Raw output is
+`/root/wmma-results/warp-tile2-k32-20260824.txt` (SHA-256
+`c2331328ae3ef595c4cbe5607871d665032134928b57e6f630644519147b9150`).
