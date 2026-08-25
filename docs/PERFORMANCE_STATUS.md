@@ -1531,3 +1531,16 @@ reached 49.076 between controls at 49.480 and 49.298. No explicit mode beats
 the launch default repeatably, so the leader remains unchanged. Raw output is
 `/root/wmma-results/inst-prefetch-mode-screen-20260824.txt` (SHA-256
 `8e9e835354ec06ff3faf26acdd9c77ee713740991a372a160721192f5f25a18c`).
+
+The separate code-object initial-prefetch field was swept at 0, 8, 12, 16,
+and 32 units versus the compiler default 63 (units are 128 bytes). All images
+were instruction-identical and exact. The short screen produced
+49.584/49.425/49.299/49.547/49.348 TFLOPS between 49.458/49.557 controls, so
+size 0 advanced to qualification. Six alternating 20-warmup/100-iteration
+pairs averaged 49.0069 TFLOPS for size 0 and 48.9999 for size 63, a negligible
++0.007-TFLOPS difference with four candidate wins. Disabling initial prefetch
+is neutral, not a promotion; retain the compiler default. Raw outputs are
+`/root/wmma-results/inst-pref-size-screen-20260824.txt` (SHA-256
+`cf58d8a255a8cb2188281103253b6818fcc5981ac526efc0d7e2e75e2b32cc89`) and
+`/root/wmma-results/inst-pref-size-qualification-20260824.txt` (SHA-256
+`b6735eeeba1971e90cee5a2b098a2c5395f871a669ad3ea67023e683bf81d907`).

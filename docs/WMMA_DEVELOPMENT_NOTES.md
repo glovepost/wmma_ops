@@ -4391,3 +4391,20 @@ between untouched controls at 49.480/49.298. Mode 3 merely tracks the control
 drift and does not beat the opening control; modes 1 and 2 are slower. Retain
 the wave-launch default and do not add a dynamic prefetch instruction.
 `build-inst-prefetch-mode.sh` reproduces the screen.
+
+### 2026-08-24: code-object initial instruction-prefetch size
+
+`.amdhsa_inst_pref_size 63` is distinct from the per-wave dynamic mode. It
+requests an initial instruction window in 128-byte units before launch. The
+fixed loop begins near `0x5b0`, so `tools/patch_inst_pref_size_asm.py` tested
+0, 8, 12, 16, and 32 units: disabled/short, just reaching the loop, covering
+the loop, and a mid-sized window. Only the descriptor field changed.
+
+All variants were exact with unchanged resources. Short results were
+49.584/49.425/49.299/49.547/49.348 TFLOPS, bracketed by 49.458/49.557 controls.
+The size-0 signal received six alternating 100-iteration pairs. Candidate
+medians averaged 49.0069 TFLOPS (48.871--49.153); controls averaged 48.9999
+(48.907--49.129). The +0.007-TFLOPS mean difference is neutral and only four
+of six pairs favored the candidate. Keep the compiler's size 63 declaration;
+startup prefetch is not the missing 50-TFLOPS gain. `build-inst-pref-size.sh`
+reproduces both stages.
