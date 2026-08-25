@@ -533,11 +533,13 @@ without weakening either numerical contract.
 1. **Close the prepacked sustained gap.** The current six-process floor is
    48.964 TFLOPS and the average is 49.143; optimize against the worst and
    median fresh process, not the best short block.
-2. **Attack the measured synchronization cost.** The one-buffer K32 path uses
-   two workgroup barriers per step. Explore a split signal/wait schedule or a
-   shared-memory layout that permits overlap while preserving the current
-   two-workgroup LDS residency. Reject any design that increases scratch or
-   loses full-output correctness.
+2. **Attack synchronization with independent work, not a wider K tile.** The
+   measured K32 publication stage halved barriers per K16 but fell to 41.439
+   TFLOPS. The RDNA 3.5 XML exposes only monolithic `S_BARRIER`, so the next
+   credible path is to overlap the existing publication latency with an
+   independent output tile or wave role while preserving two-workgroup LDS
+   residency. Reject any design that increases scratch or loses full-output
+   correctness.
 3. **Separate package behavior from kernel behavior.** The 1,000-warm-up test
    slowed over sustained execution. Capture clocks and package power in a
    separate diagnostic pass, then keep the official timing pass free of
@@ -1759,6 +1761,36 @@ gathers and sixteen swaps per K16 cost more issue/latency than the four saved
 LDS instructions. The vectorized in-wave transpose is closed without long
 qualification. `build-halfwave-b.sh` reproduces the image; raw SHA-256 is
 `d9c5b64f4ed2a7fedc44994ac3dcb1b814b6cf7fe83514242eddcdf991e7be16`.
+
+A one-buffer K32 publication architecture then tested barrier amortization
+directly. Each physical LDS row holds two K16 slices plus p8 padding (40
+halfs): A occupies 20 KiB and B 10 KiB, so the complete 30-KiB tile preserves
+two blocks/16 waves per CU. One read-complete/publication barrier pair now
+covers 32 WMMAs, rather than 16. This is the available architectural route on
+gfx1151: AMD's 2026-08-06 RDNA 3.5 XML exposes B128 as the widest LDS transfer
+and only the monolithic `S_BARRIER`, not a split arrive/wait primitive.
+
+The C++ source exposed a useful compiler boundary. Inline LDS operations made
+the intended 32 b128 reads visible, but LLVM allocated 152 VGPR and retained a
+large address forest. `tools/patch_k32_publication_asm.py` replaces those
+addresses with one A base, one B base, and immediate row/slice offsets; folds
+the six refill vectors into dead fragment banks; restores explicit progressive
+LDS waits; and emits 120 VGPR, 22 SGPR, 30 KiB LDS, and no scratch. A first
+compressed image corrupted the final tile because its compiler-specialized
+tail still depended on address VGPRs repurposed by the hot loop. Giving the
+tail immutable bases and the same canonical offsets as the repeated body
+restored the complete selected error tuple: normalized maximum error
+0.018779343, RMS error 0.035428338, and cosine similarity 0.999977929.
+
+The final 10-warmup/5x5 bracket reached **41.439 TFLOPS**, between selected
+K16 controls at 49.421 and 49.811 TFLOPS. Halving barrier frequency does not
+repay the larger LDS footprint, doubled fragment-read body, and longer live
+ranges. The K32 publication architecture is therefore closed without long
+qualification. `build-block-k32-publication.sh`,
+`block_k32_publication.hpp`, and the guarded assembly transformer reproduce
+the result. Raw output is
+`/root/wmma-results/k32-publication-selected-screen-20260824.txt` (SHA-256
+`abf771ec2a470b55b0b1519054a6b11a89927d9aa8609e21a23abee9028f334e`).
 
 None of these results changes the qualified **49.143-TFLOPS** research leader
 or the requirement for five fresh exact process medians above 50 TFLOPS.

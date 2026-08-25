@@ -4822,3 +4822,51 @@ long qualification. `tools/patch_halfwave_b_asm.py` and
 `build-halfwave-b.sh` reproduce the experiment. Raw output is
 `/root/wmma-results/halfwave-b-screen-20260824.txt` (SHA-256
 `d9c5b64f4ed2a7fedc44994ac3dcb1b814b6cf7fe83514242eddcdf991e7be16`).
+
+### 2026-08-24: one-buffer K32 publication stage
+
+The next architecture amortized workgroup publication over two K16 slices.
+A physical row contains 32 data halfs plus p8 padding, for a 40-half pitch.
+The 256x32 A tile occupies 20 KiB and the 128x32 B tile occupies 10 KiB, so
+one complete stage consumes 30 KiB and still permits two blocks/16 waves in a
+64-KiB CU LDS. Each hot body performs 32 WMMAs behind one read-complete and one
+publication barrier, halving the barrier rate per K16 without requiring two
+60-KiB ping-pong stages.
+
+This design follows the 2026-08-06 RDNA 3.5 machine-readable ISA XML. B128 is
+the widest LDS vector and `S_BARRIER` is the only workgroup barrier; there is
+no split arrive/wait instruction to substitute. K32 publication was therefore
+the direct way to test whether doing twice the matrix work per monolithic
+barrier could overcome the synchronization cost.
+
+The source implementation used explicit b128 LDS operations, but LLVM emitted
+152 VGPR and a separate dynamic address for nearly every row/slice. The guarded
+assembly transform reduces the repeated body to one A base and one B base with
+immediate offsets, remaps five fragment banks, and reuses the three A banks
+after their final WMMAs for the six next-stage global vectors. It also restores
+the progressive `lgkmcnt(4/2/0)` schedule hidden from LLVM by inline LDS asm.
+The resulting image has 32 `DS_LOAD_B128`, 32 WMMAs, and two `S_BARRIER`
+instructions per K32 body at 120 VGPR, 22 SGPR, 30,720 bytes LDS, and no
+scratch.
+
+Correctness debugging exposed a tail-allocation hazard. The compressed hot
+loop repurposed two source-generated row-address VGPRs, while the separately
+specialized final tile still read them. Early images consequently had
+normalized maximum errors of 1011.5, then 0.224 and 0.0849 as waits and the
+tail were repaired. Giving the tail immutable A/B bases in previously unused
+v111/v112 and rewriting all 32 tail loads to the canonical K32 offsets restored
+the selected full-output tuple: normalized maximum error 0.018779343, RMS
+0.035428338, and cosine 0.999977929. An XML-derived `VA_VSRC`
+`S_WAITCNT_DEPCTR` diagnostic did not change the residual, helping distinguish
+address corruption from ALU source-reuse latency.
+
+The final 10-warmup/5x5 screen measured 41.439 TFLOPS between selected K16
+controls at 49.421 and 49.811. The larger LDS stage and doubled load/compute
+body cost far more than the halved barrier frequency saves. This closes
+one-buffer K32 publication without long qualification and redirects future
+synchronization work toward overlapping independent output work rather than
+widening K alone. `build-block-k32-publication.sh`,
+`vendor-waveprivate/include/rocm_wmma_gemm/kernel/block_k32_publication.hpp`,
+and `tools/patch_k32_publication_asm.py` reproduce the image. Raw output is
+`/root/wmma-results/k32-publication-selected-screen-20260824.txt` (SHA-256
+`abf771ec2a470b55b0b1519054a6b11a89927d9aa8609e21a23abee9028f334e`).
