@@ -5036,5 +5036,10 @@ averaged 49.018881 TFLOPS. Every process reproduced normalized maximum error
 
 Reproduce the phase sweep with `build-hot-fragment-phase.sh` and the selected
 placement with `build-hot-b-phase.sh`. Raw qualification output is
-`/root/wmma-results/hot-b-phase111-qualification-20260825.txt` (SHA-256
-`16cd5054723ec6db71b61ce27b0fe9d7d23f009471b9297d31e815090927c6b7`).
+checked in at
+[`results/hot-b-phase111-qualification-20260825.txt`](../results/hot-b-phase111-qualification-20260825.txt)
+(SHA-256
+`16cd5054723ec6db71b61ce27b0fe9d7d23f009471b9297d31e815090927c6b7`). The
+single start-to-finish procedure, including the exact environment, build, host
+lock, alternating process order, and acceptance gate, is in
+[Reproducing the 50 TFLOPS qualification](REPRODUCING_50_TFLOPS.md).

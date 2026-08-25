@@ -98,6 +98,7 @@ resource metadata, and promotion rules.
 |---|---|
 | [Documentation index](docs/README.md) | Map of current, historical, and reference material |
 | [Performance status](docs/PERFORMANCE_STATUS.md) | Current measurements, source audit, and next experiments |
+| [Reproducing 50 TFLOPS](docs/REPRODUCING_50_TFLOPS.md) | Exact build, fresh-process qualification command, environment, and raw output |
 | [Profiling guide](docs/PROFILING.md) | Timing, counters, ISA inspection, and shared-host discipline |
 | [WMMA fragment layout](docs/wmma_fragment_layout_rdna3.md) | Verified gfx1151 lane/register mappings |
 | [Annotated references](docs/wmma_references.md) | Primary AMD sources and architecture-porting hazards |

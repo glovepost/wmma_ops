@@ -9,9 +9,11 @@ and a long historical notebook. They do not carry equal authority.
    points.
 2. [Performance status](PERFORMANCE_STATUS.md) — current result ledger,
    numerical contracts, source audit, rejected paths, and promotion gate.
-3. [Profiling guide](PROFILING.md) — how to separate timing, counters, and ISA
+3. [50 TFLOPS reproduction](REPRODUCING_50_TFLOPS.md) — exact environment,
+   build, five-process qualification command, acceptance criteria, and raw log.
+4. [Profiling guide](PROFILING.md) — how to separate timing, counters, and ISA
    analysis on gfx1151.
-4. [Frontier exploration](../FRONTIER_EXPLORATION_2026-08-23.md) — dated
+5. [Frontier exploration](../FRONTIER_EXPLORATION_2026-08-23.md) — dated
    frontier experiments, Paperclip research, and the current route to 50
    TFLOPS.
 

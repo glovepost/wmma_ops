@@ -1,0 +1,60 @@
+=== bp-hot-b-phase-111 ===
+occupancy active_blocks_per_cu=2 active_waves_per_cu=16
+config=4,2,4,4,1,1,16,128 shape=4096x4096x4096 block=256x128 k=16 cu_mode=1 warmup=20 timing_blocks=5 iterations_per_block=100 offsets=0,0,0 allocation=separate input_contract=A/B-block-K16-prepacked pipeline=blocked-native-fragment dispatch=single grids=512,0
+median_ms=2.747963 tflops=50.014850 min_ms=2.729277 max_ms=2.773714
+validation finite=yes elements=16777216 max_abs_error=0.562500000 reference_max_abs=29.953125000 normalized_max_error=0.018779343 rms_error=0.035428338 cosine_similarity=0.999977929
+promotion target_tflops=50.000 pass=yes
+=== bp-publish-lgkm0 ===
+occupancy active_blocks_per_cu=2 active_waves_per_cu=16
+config=4,2,4,4,1,1,16,128 block=256x128 k=16 cu_mode=1 warmup=20 timing_blocks=5 iterations_per_block=100 offsets=0,0,0 allocation=separate input_contract=A/B-block-K16-prepacked pipeline=blocked-native-fragment
+median_ms=2.808407 tflops=48.938402 min_ms=2.786880 max_ms=2.839928
+validation finite=yes elements=16777216 max_abs_error=0.562500000 reference_max_abs=29.953125000 normalized_max_error=0.018779343 rms_error=0.035428338 cosine_similarity=0.999977929
+promotion target_tflops=50.000 pass=no
+=== bp-publish-lgkm0 ===
+occupancy active_blocks_per_cu=2 active_waves_per_cu=16
+config=4,2,4,4,1,1,16,128 block=256x128 k=16 cu_mode=1 warmup=20 timing_blocks=5 iterations_per_block=100 offsets=0,0,0 allocation=separate input_contract=A/B-block-K16-prepacked pipeline=blocked-native-fragment
+median_ms=2.796952 tflops=49.138827 min_ms=2.783746 max_ms=2.818405
+validation finite=yes elements=16777216 max_abs_error=0.562500000 reference_max_abs=29.953125000 normalized_max_error=0.018779343 rms_error=0.035428338 cosine_similarity=0.999977929
+promotion target_tflops=50.000 pass=no
+=== bp-hot-b-phase-111 ===
+occupancy active_blocks_per_cu=2 active_waves_per_cu=16
+config=4,2,4,4,1,1,16,128 shape=4096x4096x4096 block=256x128 k=16 cu_mode=1 warmup=20 timing_blocks=5 iterations_per_block=100 offsets=0,0,0 allocation=separate input_contract=A/B-block-K16-prepacked pipeline=blocked-native-fragment dispatch=single grids=512,0
+median_ms=2.741345 tflops=50.135584 min_ms=2.725931 max_ms=2.756844
+validation finite=yes elements=16777216 max_abs_error=0.562500000 reference_max_abs=29.953125000 normalized_max_error=0.018779343 rms_error=0.035428338 cosine_similarity=0.999977929
+promotion target_tflops=50.000 pass=yes
+=== bp-hot-b-phase-111 ===
+occupancy active_blocks_per_cu=2 active_waves_per_cu=16
+config=4,2,4,4,1,1,16,128 shape=4096x4096x4096 block=256x128 k=16 cu_mode=1 warmup=20 timing_blocks=5 iterations_per_block=100 offsets=0,0,0 allocation=separate input_contract=A/B-block-K16-prepacked pipeline=blocked-native-fragment dispatch=single grids=512,0
+median_ms=2.740753 tflops=50.146413 min_ms=2.732605 max_ms=2.743056
+validation finite=yes elements=16777216 max_abs_error=0.562500000 reference_max_abs=29.953125000 normalized_max_error=0.018779343 rms_error=0.035428338 cosine_similarity=0.999977929
+promotion target_tflops=50.000 pass=yes
+=== bp-publish-lgkm0 ===
+occupancy active_blocks_per_cu=2 active_waves_per_cu=16
+config=4,2,4,4,1,1,16,128 block=256x128 k=16 cu_mode=1 warmup=20 timing_blocks=5 iterations_per_block=100 offsets=0,0,0 allocation=separate input_contract=A/B-block-K16-prepacked pipeline=blocked-native-fragment
+median_ms=2.806378 tflops=48.973779 min_ms=2.800857 max_ms=2.834434
+validation finite=yes elements=16777216 max_abs_error=0.562500000 reference_max_abs=29.953125000 normalized_max_error=0.018779343 rms_error=0.035428338 cosine_similarity=0.999977929
+promotion target_tflops=50.000 pass=no
+=== bp-publish-lgkm0 ===
+occupancy active_blocks_per_cu=2 active_waves_per_cu=16
+config=4,2,4,4,1,1,16,128 block=256x128 k=16 cu_mode=1 warmup=20 timing_blocks=5 iterations_per_block=100 offsets=0,0,0 allocation=separate input_contract=A/B-block-K16-prepacked pipeline=blocked-native-fragment
+median_ms=2.811505 tflops=48.884476 min_ms=2.798425 max_ms=2.881444
+validation finite=yes elements=16777216 max_abs_error=0.562500000 reference_max_abs=29.953125000 normalized_max_error=0.018779343 rms_error=0.035428338 cosine_similarity=0.999977929
+promotion target_tflops=50.000 pass=no
+=== bp-hot-b-phase-111 ===
+occupancy active_blocks_per_cu=2 active_waves_per_cu=16
+config=4,2,4,4,1,1,16,128 shape=4096x4096x4096 block=256x128 k=16 cu_mode=1 warmup=20 timing_blocks=5 iterations_per_block=100 offsets=0,0,0 allocation=separate input_contract=A/B-block-K16-prepacked pipeline=blocked-native-fragment dispatch=single grids=512,0
+median_ms=2.747356 tflops=50.025904 min_ms=2.728213 max_ms=2.779048
+validation finite=yes elements=16777216 max_abs_error=0.562500000 reference_max_abs=29.953125000 normalized_max_error=0.018779343 rms_error=0.035428338 cosine_similarity=0.999977929
+promotion target_tflops=50.000 pass=yes
+=== bp-hot-b-phase-111 ===
+occupancy active_blocks_per_cu=2 active_waves_per_cu=16
+config=4,2,4,4,1,1,16,128 shape=4096x4096x4096 block=256x128 k=16 cu_mode=1 warmup=20 timing_blocks=5 iterations_per_block=100 offsets=0,0,0 allocation=separate input_contract=A/B-block-K16-prepacked pipeline=blocked-native-fragment dispatch=single grids=512,0
+median_ms=2.746217 tflops=50.046643 min_ms=2.733474 max_ms=2.766265
+validation finite=yes elements=16777216 max_abs_error=0.562500000 reference_max_abs=29.953125000 normalized_max_error=0.018779343 rms_error=0.035428338 cosine_similarity=0.999977929
+promotion target_tflops=50.000 pass=yes
+=== bp-publish-lgkm0 ===
+occupancy active_blocks_per_cu=2 active_waves_per_cu=16
+config=4,2,4,4,1,1,16,128 block=256x128 k=16 cu_mode=1 warmup=20 timing_blocks=5 iterations_per_block=100 offsets=0,0,0 allocation=separate input_contract=A/B-block-K16-prepacked pipeline=blocked-native-fragment
+median_ms=2.795809 tflops=49.158920 min_ms=2.778363 max_ms=2.813315
+validation finite=yes elements=16777216 max_abs_error=0.562500000 reference_max_abs=29.953125000 normalized_max_error=0.018779343 rms_error=0.035428338 cosine_similarity=0.999977929
+promotion target_tflops=50.000 pass=no

@@ -1889,6 +1889,10 @@ rule without changing the numerical or persistent-input contract.
 `build-hot-fragment-phase.sh`, `build-hot-b-phase.sh`,
 `tools/rotate_hot_fragment_phase_asm.py`, and
 `tools/place_hot_b_phase_asm.py` reproduce the sweep and selected image. Raw
-qualification output is
-`/root/wmma-results/hot-b-phase111-qualification-20260825.txt` (SHA-256
+qualification output is checked in at
+[`results/hot-b-phase111-qualification-20260825.txt`](../results/hot-b-phase111-qualification-20260825.txt)
+(SHA-256
 `16cd5054723ec6db71b61ce27b0fe9d7d23f009471b9297d31e815090927c6b7`).
+See [Reproducing the 50 TFLOPS qualification](REPRODUCING_50_TFLOPS.md) for
+the pinned toolchain, literal build and five-process commands, pair order, and
+acceptance criteria.
