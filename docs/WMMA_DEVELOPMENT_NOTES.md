@@ -4218,3 +4218,78 @@ LDS-only `lgkmcnt(0)` form as the new 49.143-TFLOPS research base. The raw log
 is `/root/wmma-results/early-barrier-lgkm-20260824.txt` on the GPU host
 (SHA-256
 `fb90cec6d232d17fcc0fe933160f4684bf81e0617a3bc433683c5069353b4cfa`).
+
+### 2026-08-24: K-loop unroll and code-object controls
+
+The 49.143-TFLOPS leader still executes a scalar decrement, compare, and branch
+for every K16 slice. `tools/unroll_kloop_asm.py` implements a guarded
+K=4096-only transform: peel one complete body, repeat two unchanged bodies per
+back edge, and preserve every memory instruction, wait, WMMA, LDS publication,
+and barrier. The emitted pair loop contains one `s_cmp_eq_u32` and one back
+edge for two slices, with unchanged 120 VGPR, 22 SGPR, and 18 KiB LDS.
+
+It was exact, but six alternating-order candidate/control pairs averaged
+48.798997 versus 48.803105 TFLOPS and split their wins 3/3. This falsifies the
+idea that scalar loop control accounts for the final 1.7% to 50 TFLOPS. Keep
+the transform as a reproducible negative control; do not select it.
+
+The device instructions for `FWD_PROGRESS=0`, `MEM_ORDERED=0`, and the combined
+descriptor mode were byte-for-byte identical after stripping filenames.
+Short exact medians were 49.454, 49.590, and 49.486 TFLOPS between 49.586 and
+49.776 controls. LLVM defines `FWD_PROGRESS=0` as oldest-first scheduling and
+`MEM_ORDERED=0` as unordered VM counter reporting for sample operations. The
+former hurts this cooperative schedule and the latter provides no measurable
+gain. `tools/patch_descriptor_mode_asm.py` and
+`build-descriptor-modes.sh` retain the screen.
+
+### 2026-08-24: authoritative RDNA 3.5 XML audit
+
+Instruction availability was rechecked from AMD's exact machine-readable
+source at
+[`gpuopen.com/download/machine-readable-isa/latest/`](https://gpuopen.com/download/machine-readable-isa/latest/).
+The endpoint supplied `AMD_GPU_MR_ISA_XML_2026_08_06.zip`; all gfx1151 queries
+used its `amdgpu_isa_rdna3_5.xml` member.
+
+The XML inventory has `S_BARRIER` but no `S_BARRIER_SIGNAL` or
+`S_BARRIER_WAIT`, and its widest LDS vectors are `DS_LOAD_B128` and
+`DS_STORE_B128`. The available WMMA families include FP16/BF16 FP32
+accumulation, packed FP16/BF16 accumulation, and I32 IU8/IU4. Therefore:
+
+- split-barrier overlap is not an RDNA 3.5 instruction option;
+- the existing 128-bit LDS transfers already use the maximum encoded width;
+- gfx12 barrier and fragment-layout features must not be inferred for gfx1151;
+- IU4 remains a real but numerically different quantized architecture, as the
+  existing four-slice ring measurements show.
+
+This XML is the primary inventory for future ISA proposals. The checked-in
+human-readable ISA conversion remains useful for semantics and citations, but
+instruction existence should be verified against the current XML bundle.
+
+### 2026-08-24: repaired compact 128x128 ownership
+
+The old `warp_tile_m=2` branch was invalid for a 128x128 block in three ways:
+the prologue loaded only 128 of B's 256 vectors, the subsequent generic
+128-row branch overwrote its registers with out-of-bounds `2*tid` loads, and
+the loop refill used the same inconsistent ownership. This explains the
+earlier wrong-output experiment; it was not evidence about the compact
+architecture's performance.
+
+`WMMA_BP_WARP_TILE2_REPAIR=1` now guards the exact supported geometry
+(N-packed 128x128 K16, single buffer). All 256 threads own one `u16x8` vector
+from A and B, then publish vector `tid` as row `tid >> 1`, half
+`(tid & 1) * 8`. The same rule is used in the prologue and steady-state
+refill. The repaired kernel is full-output exact with normalized maximum
+error 0.018779343, RMS 0.035428338, and cosine 0.999977929.
+
+Resources improved to 90 VGPR, 22 SGPR, 12 KiB LDS, and four blocks/32 waves
+per CU, but performance did not: the initial form reached 44.568 TFLOPS.
+Five refill placements were all exact and measured 44.376 (`a0b0`), 44.441
+(`a0b1`), 44.358 (`a0b2`), 44.661 (`a0b3`), and 44.796 TFLOPS (`a1b0`).
+The last is too far behind the qualified leader to warrant a long run.
+
+The lesson is structural. Each compact wave performs eight WMMAs per K16
+slice instead of sixteen, while each block still needs the same two
+publication barriers. Four resident blocks raise occupancy but double the
+handoff frequency per output element. Future compact-tile work would need to
+amortize multiple K16 slices per publication, not merely reschedule the two
+global refills. `build-warp-tile2-repair.sh` reproduces the exact candidates.

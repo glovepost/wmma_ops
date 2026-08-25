@@ -82,6 +82,9 @@ namespace rocm_wmma_gemm
 #ifndef WMMA_BP_WARP_TILE_M
 #define WMMA_BP_WARP_TILE_M 4
 #endif
+#ifndef WMMA_BP_WARP_TILE2_REPAIR
+#define WMMA_BP_WARP_TILE2_REPAIR 0
+#endif
 #ifndef WMMA_BP_SET_PRIO
 #define WMMA_BP_SET_PRIO 0
 #endif
@@ -146,6 +149,18 @@ struct block_prepacked_gemm
         static_assert((block_m == 128 || block_m == 256)
                       && (block_n == 128 || block_n == 256));
         static_assert(WMMA_BP_K_SLICES == 1 || WMMA_BP_K_SLICES == 2);
+        static_assert(!WMMA_BP_WARP_TILE2_REPAIR
+                          || (WMMA_BP_PACK_N && block_m == 128
+                              && block_n == 128 && warp_tile_m == 2
+                              && WMMA_BP_K_SLICES == 1
+                              && !WMMA_BP_DOUBLE_BUFFER),
+                      "warp-tile-2 repair specializes N-packed 128x128 K16 single buffering");
+        static_assert(!WMMA_BP_WARP_TILE2_REPAIR
+                          || (WMMA_BP_PREFETCH_A0_WN >= 0
+                              && WMMA_BP_PREFETCH_A0_WN < 4
+                              && WMMA_BP_PREFETCH_B_WN >= 0
+                              && WMMA_BP_PREFETCH_B_WN < 4),
+                      "warp-tile-2 prefetch positions must name a WMMA N step");
         static_assert(!WMMA_BP_LATE_B_REFILL
                           || (WMMA_BP_PACK_N && block_m == 128
                               && block_n == 128 && !WMMA_BP_DOUBLE_BUFFER
@@ -221,7 +236,17 @@ struct block_prepacked_gemm
         {
             const u16x8* a_vectors = reinterpret_cast<const u16x8*>(next_a);
             const u16x8* b_vectors = reinterpret_cast<const u16x8*>(next_b_ptr);
-            if constexpr(block_n == 128)
+            if constexpr(WMMA_BP_WARP_TILE2_REPAIR)
+            {
+                // The compact 128x128 block has 256 vectors in each input
+                // tile and exactly 256 threads.  Give every thread one A and
+                // one B vector; the former warp/lane scheme covered only half
+                // of B and the generic block_m==128 path then overwrote both
+                // registers with out-of-bounds 2*tid loads.
+                next_a0 = a_vectors[tid];
+                next_b = b_vectors[tid];
+            }
+            else if constexpr(block_n == 128)
             {
                 if constexpr(warp_tile_m == 2)
                 {
@@ -237,12 +262,12 @@ struct block_prepacked_gemm
             }
             else
                 next_a0 = a_vectors[tid];
-            if constexpr(block_m == 128)
+            if constexpr(!WMMA_BP_WARP_TILE2_REPAIR && block_m == 128)
             {
                 next_b = b_vectors[2 * tid];
                 next_b1 = b_vectors[2 * tid + 1];
             }
-            else if constexpr(warp_tile_m != 2)
+            else if constexpr(!WMMA_BP_WARP_TILE2_REPAIR && warp_tile_m != 2)
                 next_b = b_vectors[tid];
         };
 
@@ -280,7 +305,14 @@ struct block_prepacked_gemm
             }
             if constexpr(warp_tile_m == 2)
             {
-                if(lane < 16)
+                if constexpr(WMMA_BP_WARP_TILE2_REPAIR)
+                {
+                    const int b_row = tid >> 1;
+                    const int b_half = (tid & 1) * 8;
+                    *reinterpret_cast<u16x8*>(
+                        b_lds + b_row * stride_b + b_half) = next_b;
+                }
+                else if(lane < 16)
                 {
                     const int vector = wave * 16 + lane;
                     const int row = vector >> 1;
@@ -663,27 +695,37 @@ struct block_prepacked_gemm
                             }
                             else if constexpr(block_m == 128 && block_n == 128)
                             {
-                                if(wn == 0)
+                                if constexpr(WMMA_BP_WARP_TILE2_REPAIR)
                                 {
-                                    if constexpr(WMMA_BP_BUFFER_A_PREFETCH)
-                                        next_a0 = buffer_load_a_128(
-                                            next_a, 32 * tid, 0);
-                                    else
-                                        next_a0 = a_vectors[2 * tid];
+                                    if(wn == WMMA_BP_PREFETCH_A0_WN)
+                                        next_a0 = a_vectors[tid];
+                                    if(wn == WMMA_BP_PREFETCH_B_WN)
+                                        next_b = b_vectors[tid];
                                 }
-                                else if(wn == 1)
+                                else
                                 {
-                                    if constexpr(WMMA_BP_BUFFER_A_PREFETCH)
-                                        next_a1 = buffer_load_a_128(
-                                            next_a, 32 * tid, 16);
-                                    else
-                                        next_a1 = a_vectors[2 * tid + 1];
+                                    if(wn == 0)
+                                    {
+                                        if constexpr(WMMA_BP_BUFFER_A_PREFETCH)
+                                            next_a0 = buffer_load_a_128(
+                                                next_a, 32 * tid, 0);
+                                        else
+                                            next_a0 = a_vectors[2 * tid];
+                                    }
+                                    else if(wn == 1)
+                                    {
+                                        if constexpr(WMMA_BP_BUFFER_A_PREFETCH)
+                                            next_a1 = buffer_load_a_128(
+                                                next_a, 32 * tid, 16);
+                                        else
+                                            next_a1 = a_vectors[2 * tid + 1];
+                                    }
+                                    else if(wn == 2 && !WMMA_BP_LATE_B_REFILL)
+                                        next_b = b_vectors[2 * tid];
+                                    else if(wn == 3 && !WMMA_BP_LATE_B1_PREFETCH
+                                            && !WMMA_BP_LATE_B_REFILL)
+                                        next_b1 = b_vectors[2 * tid + 1];
                                 }
-                                else if(wn == 2 && !WMMA_BP_LATE_B_REFILL)
-                                    next_b = b_vectors[2 * tid];
-                                else if(wn == 3 && !WMMA_BP_LATE_B1_PREFETCH
-                                        && !WMMA_BP_LATE_B_REFILL)
-                                    next_b1 = b_vectors[2 * tid + 1];
                             }
                         }
 

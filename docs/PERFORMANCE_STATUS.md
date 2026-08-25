@@ -1407,3 +1407,58 @@ All loadable forms were exact, but a six-pair order-balanced isolation measured
 LDS-only-wait image. Moving the WMMAs contributes no independent gain and is
 retained only as negative architecture evidence. `build-publish-wait.sh` and
 `build-early-read-barrier.sh` reproduce both families.
+
+### 2026-08-24 loop control, ISA XML, and compact-tile architecture
+
+The fixed K=4096 loop was peeled once and unrolled by two with
+`tools/unroll_kloop_asm.py`, removing one compare and back-edge branch per two
+K16 slices without changing any load, wait, WMMA, store, or barrier. The image
+kept the leader's 120-VGPR/22-SGPR/18-KiB resource tuple and exact full-output
+error tuple. Six alternating-order 20-warmup/100-iteration pairs averaged
+48.798997 TFLOPS for the unroll and 48.803105 for the LDS-only-wait control;
+each won three pairs. Scalar loop control is therefore neutral, not the
+remaining bottleneck. Raw output is
+`/root/wmma-results/kloop-unroll2-20260824.txt` (SHA-256
+`43113cbe964704191cb4957ef64000a6915d061286fd1150dd092f95af446faf`).
+
+ISA decisions in this pass were checked against AMD's machine-readable
+RDNA 3.5 XML, downloaded from
+[`gpuopen.com/download/machine-readable-isa/latest/`](https://gpuopen.com/download/machine-readable-isa/latest/).
+On 2026-08-24 that endpoint resolved to
+`AMD_GPU_MR_ISA_XML_2026_08_06.zip`; the relevant member is
+`amdgpu_isa_rdna3_5.xml`. It exposes only the monolithic `S_BARRIER` on this
+generation, not split signal/wait barriers, and the widest LDS vector
+operations are `DS_LOAD_B128` and `DS_STORE_B128`. This independently closes
+split-barrier and 256-bit LDS-transfer proposals, matching the ROCm 7.14
+assembler behavior. Future instruction claims should use this XML as the
+primary ISA inventory rather than borrowing gfx12 behavior.
+
+The code-object scheduler declarations were also isolated with identical
+device instruction streams. Setting `FWD_PROGRESS=0` (oldest-first),
+`MEM_ORDERED=0`, or both produced exact short medians of 49.454, 49.590, and
+49.486 TFLOPS, respectively, bracketed by 49.586 and 49.776 controls. The
+oldest-first policy regressed and unordered memory reporting was neutral; no
+long qualification was justified. Raw output is
+`/root/wmma-results/descriptor-modes-20260824.txt` (SHA-256
+`1448fe1d98b97aaf4aa215058a2f023a3114e2dfbddffa74ae22dfc8a3a40a80`).
+
+Finally, the dormant 128x128 `warp_tile_m=2` path was audited as a genuinely
+different ownership architecture. Its initial load covered only half of B,
+its generic 128-row fallthrough issued out-of-bounds `2*tid` vectors, and its
+steady-state prefetch repeated the mismatched mapping. The opt-in
+`WMMA_BP_WARP_TILE2_REPAIR` gives each of the 256 threads one 16-byte A vector
+and one 16-byte B vector in the initial load, LDS publication, and every K16
+refill. The repaired kernel is exact over all 16,777,216 outputs and compiles
+to 90 VGPR, 22 SGPR, 12 KiB LDS, no spills, and four blocks/32 waves per CU.
+
+That extra residency did not win. The first repaired screen reached 44.568
+TFLOPS. Moving the two refill issue points across the four N steps kept every
+candidate exact and produced 44.376 (`a0b0`), 44.441 (`a0b1`), 44.358
+(`a0b2`), 44.661 (`a0b3`), and 44.796 TFLOPS (`a1b0`). Halving useful WMMA
+work per wave doubles block-level publication boundaries for the same matrix;
+32 resident waves do not repay that synchronization rate. The compact path
+is retained as a correct architectural control, not promoted or long-qualified.
+Raw outputs are `/root/wmma-results/warp-tile2-repair-20260824.txt` (SHA-256
+`8fee79bacb254f8ec3692661a5e6a79aef3192f70220e390eba81ef19fe73f17`) and
+`/root/wmma-results/warp-tile2-prefetch-20260824.txt` (SHA-256
+`c8fb1b74fdae35eb8085e4f297e7789da9dc814c1f8389784e086d5e41e9147a`).
