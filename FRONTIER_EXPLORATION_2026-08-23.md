@@ -11,6 +11,11 @@ and the shared GPU lock with production stopped/restored.  These are screening
 results, not five-fresh-process promotion results.  The existing fresh-process
 baseline remains 46.082 TFLOPS (2.982 ms); 50 TFLOPS requires 2.748779 ms.
 
+> **2026-08-25 outcome:** Later hot-loop register-placement work cleared this
+> file's target. Independent phase-7 placement of B averages 50.074 TFLOPS
+> across five fresh exact processes with a 50.015-TFLOPS floor. See the final
+> section below and `docs/PERFORMANCE_STATUS.md` for the authoritative result.
+
 ## Control
 
 | Candidate | TFLOPS | Median ms | Resources |
@@ -1184,3 +1189,21 @@ correct but neutral in direct isolation (48.866 versus 48.890 TFLOPS for the
 wait-only image). Relaxing the selected LDS threshold to `lgkmcnt(1)` or `(2)`
 failed the full-output gate. The retained mechanism is therefore the narrow
 counter domain, not early-barrier overlap or incomplete LDS publication.
+
+### 2026-08-25 target reached: independent B register phase
+
+A same-120-VGPR sweep isolated all eight hot-fragment register phases without
+changing the repeated instruction stream or two-block/16-wave residency. The
+uniform sweep found phases 0/3/4/7 near the selected control and phases
+1/2/5/6 about 2% slower. Keeping A on phase 4 while placing B independently at
+`v111:v118` (phase 7) then produced a 50.530-TFLOPS exact short screen.
+
+Five fresh 20-warmup/100-iteration processes measured
+50.014850/50.135584/50.146413/50.025904/50.046643 TFLOPS: **50.073879 TFLOPS
+average** and a **50.014850-TFLOPS floor**. Alternating paired controls averaged
+49.018881 TFLOPS. Every process passed the full-output tuple. The project has
+therefore met the sustained 50-TFLOPS gate for the distinct persistent
+block/K16-prepacked FP16-output contract. Reproduction scripts are
+`build-hot-fragment-phase.sh` and `build-hot-b-phase.sh`; the raw qualification
+log SHA-256 is
+`16cd5054723ec6db71b61ce27b0fe9d7d23f009471b9297d31e815090927c6b7`.

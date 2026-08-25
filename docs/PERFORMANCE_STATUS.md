@@ -1,7 +1,7 @@
 # gfx1151 WMMA performance status
 
 This is the current performance ledger and optimization plan for the repository.
-It was refreshed on 2026-08-24 with the ordinary-layout standalone harness,
+It was refreshed on 2026-08-25 with the ordinary-layout standalone harness,
 the block/K16-prepacked research harness, the Paperclip literature pass, and
 the current assembly-search tooling. In-progress extension-kernel changes in
 the shared worktree were deliberately not included. The older development
@@ -16,7 +16,8 @@ It uses the pinned standalone harness in `tools/`, deterministic random inputs,
 and a full rocBLAS FP32 reference over all 16,777,216 outputs. Its five-process
 ordinary-layout audit had a 40.900 TFLOPS median and a 40.772-41.104 range. The
 separate block/K16-prepacked FP16-output contract is the current sustained
-research leader at 49.143 TFLOPS; it has its own 50-TFLOPS promotion gate.
+research leader at **50.074 TFLOPS** and has cleared its five-process
+50-TFLOPS promotion gate.
 
 The previous documented record was **21.6 TFLOPS**. It came from the historical
 ROCm 7.9/7.10-preview environment and used three warm-ups and 20 timed
@@ -273,16 +274,15 @@ This result demonstrates that a full data-moving IU4 kernel can exceed the
 50-operations/s target, but it remains a distinct integer contract.  It is not
 eligible for the FP16 TFLOPS table or record gate.
 
-The current FP16-output, block/K16-prepacked research leader averages **49.143
-TFLOPS** at 4096 cubed across six alternating-order candidate/control pairs.
-Its medians are 49.376/49.307/49.149/49.029/49.032/48.964 TFLOPS, with a
-48.964-TFLOPS floor and 2.796758-ms average median time. Paired delta-2 controls
-average 49.014 TFLOPS. It uses a 256x128 block, eight waves, p8 A/B LDS rows,
-120 VGPR, 22 SGPR, 18 KiB LDS, and no spills. The result passed a full rocBLAS
-reference check in every process, but it is a persistent-input contract:
-packing is outside the timed region. The previous qualified leader averaged
-49.035 TFLOPS. Isolated higher samples remain non-promotable; the sustained
-50-TFLOPS FP16 gate is still open.
+The current FP16-output, block/K16-prepacked research leader averages **50.074
+TFLOPS** at 4096 cubed across five fresh alternating-order candidate/control
+pairs. Its medians are 50.015/50.136/50.146/50.026/50.047 TFLOPS, with a
+50.015-TFLOPS floor and 2.744730-ms average median time. Paired selected-image
+controls average 49.019 TFLOPS. It uses a 256x128 block, eight waves, p8 A/B
+LDS rows, 120 VGPR, 22 SGPR, 18 KiB LDS, and no spills. The result passed a
+full rocBLAS reference check in every process, but it is a persistent-input
+contract: packing is outside the timed region. The prior qualified leader
+averaged 49.143 TFLOPS. The sustained 50-TFLOPS FP16 gate is now met.
 
 A fresh five-process recheck after the shared-box load-settle experiment
 measured **48.939/48.912/48.847/48.633/48.504 TFLOPS** (48.767 average,
@@ -524,15 +524,15 @@ stores into transposed LDS, and uses the same scalar direct-to-global epilogue
 as the standard kernel. "Zero-copy" and "swizzled B" are historical names, not
 descriptions of the current data path.
 
-## Current plan to sustain more than 50 TFLOPS
+## Current plan beyond 50 TFLOPS
 
-The ordinary-layout peak has been crossed and the prepacked contract is within
-1.71% of the target. The remaining work is to make a 50-TFLOPS crossing durable
-without weakening either numerical contract.
+The ordinary-layout peak remains a separate contract, while the prepacked
+FP16-output kernel now averages 50.074 TFLOPS with a 50.015 floor. The next
+work is to widen that margin without weakening either numerical contract.
 
-1. **Close the prepacked sustained gap.** The current six-process floor is
-   48.964 TFLOPS and the average is 49.143; optimize against the worst and
-   median fresh process, not the best short block.
+1. **Protect the qualified floor.** Optimize against the 50.015-TFLOPS floor
+   and fresh-process average, not the 50.530 short screen. Re-run the five
+   process gate after any compiler, clock, firmware, or harness change.
 2. **Attack synchronization with independent work, not a wider K tile.** The
    measured K32 publication stage halved barriers per K16 but fell to 41.439
    TFLOPS. The RDNA 3.5 XML exposes only monolithic `S_BARRIER`, so the next
@@ -547,9 +547,9 @@ without weakening either numerical contract.
 4. **Port the exact schedule into the PyTorch extension.** Preserve the pinned
    standalone harness as the baseline, then compare the integrated kernel with
    identical preallocated output and inputs before measuring API overhead.
-5. **Promote only after five fresh processes.** The full reference must pass in
-   every process and every process median must exceed 50.0 TFLOPS for the
-   prepacked contract. Keep the ordinary-layout contract's separate gate.
+5. **Keep promotion evidence reproducible.** The full reference must pass in
+   every process and every process median must remain above 50.0 TFLOPS for
+   the prepacked contract. Keep the ordinary-layout contract's separate gate.
 
 ## Low-priority paths for the square record shape
 
@@ -1854,5 +1854,41 @@ architecture remains a reproducible negative result and is not qualified.
 (SHA-256
 `c5108455a596b8e011ff5d3794941b25bed435a48bf9cc20f7eb5d896599495b`).
 
-None of these results changes the qualified **49.143-TFLOPS** research leader
-or the requirement for five fresh exact process medians above 50 TFLOPS.
+At that point none of these results changed the qualified 49.143-TFLOPS
+research leader or the requirement for five fresh exact process medians above
+50 TFLOPS. The register-placement result below subsequently cleared that gate.
+
+### 2026-08-25 independent hot-B register phase clears 50 TFLOPS
+
+The selected delta-2 allocation established that physical VGPR placement is
+load-bearing, but earlier +4/+6 boundary shifts also changed the declared
+allocation and runtime residency. `tools/rotate_hot_fragment_phase_asm.py`
+isolated all eight modulo-eight fragment phases while retaining 120 VGPR,
+22 SGPR, 18 KiB LDS, no scratch, and two blocks/16 waves. Every phase was
+exact. Phases 1/2/5/6 lost about 2%; phases 0/3/4/7 stayed near the selected
+phase-4 control. No uniform rotation improved the leader.
+
+The follow-up kept all four A fragments on their proven phase-4 banks and
+placed the repeatedly loaded B fragment independently. `v108:v115` (phase 4)
+and `v112:v119` (phase 0) remained below 50, while `v111:v118` (phase 7)
+reached 50.530 TFLOPS in the short exact screen between 49.552/49.524 controls.
+The transform rotates A2/A3 into the vacated B slots and stages the B refill in
+`v72:v75`; it changes no repeated opcode/order, wait threshold, memory address,
+WMMA count, or memory-operation count and adds only two one-time address-shadow
+moves before the K loop.
+
+Five fresh processes then used 20 warmups and five 100-iteration timing blocks
+with candidate/control order alternated. Candidate medians were **50.014850,
+50.135584, 50.146413, 50.025904, and 50.046643 TFLOPS**: **50.073879 TFLOPS
+average**, 50.014850 floor, and 2.744730-ms average median time. Paired controls
+averaged 49.018881 TFLOPS. All ten processes reproduced normalized maximum
+error 0.018779343, RMS 0.035428338, and cosine similarity 0.999977929 over all
+16,777,216 outputs. This is a +2.152% same-pass uplift and clears the promotion
+rule without changing the numerical or persistent-input contract.
+
+`build-hot-fragment-phase.sh`, `build-hot-b-phase.sh`,
+`tools/rotate_hot_fragment_phase_asm.py`, and
+`tools/place_hot_b_phase_asm.py` reproduce the sweep and selected image. Raw
+qualification output is
+`/root/wmma-results/hot-b-phase111-qualification-20260825.txt` (SHA-256
+`16cd5054723ec6db71b61ce27b0fe9d7d23f009471b9297d31e815090927c6b7`).

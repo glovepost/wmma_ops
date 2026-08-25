@@ -7,8 +7,10 @@
 > rejected. It is intentionally retained as experiment history. Use
 > [`PERFORMANCE_STATUS.md`](PERFORMANCE_STATUS.md) for the refreshed 2026-08-24
 > source state and [`README.md`](README.md) for the documentation map. The
-> current validated standalone peak is 41.322 TFLOPS; every “current status”
-> label below is local to its historical section and is not the active plan.
+> current validated ordinary-layout standalone peak is 41.322 TFLOPS. The
+> separate block/K16-prepacked FP16-output contract averages 50.074 TFLOPS
+> across five fresh exact processes. Every “current status” label below is
+> local to its historical section and is not the active plan.
 
 The notebook begins with the original code-organization plan, then appends
 fragment-layout investigations, correctness results, optimization experiments,
@@ -3100,8 +3102,8 @@ different numerical and input-layout contracts and must not be conflated.
 | Repository FP16 input / FP32 accumulation and output | 41.322 TFLOPS peak | Full rocBLAS-reference validation; five-process median 40.900 TFLOPS, so the sustained promotion gate remains open |
 | Upstream FP16 input / FP16 output control | 46.082 TFLOPS median | Reproduced from three fresh processes; external comparison, not the repository record |
 | Original-layout FP16-output control in the block-pack campaign | 45.697 TFLOPS | Same-pass screening control |
-| Persistent block/K-major FP16-output inputs | **49.143 TFLOPS average** | Six alternating-order 100-iteration candidate/control pairs; current sustained leader for the separate prepacked-input contract |
-| Best short persistent block/K-major pass | 49.573 TFLOPS | Below the 50 TFLOPS gate and not sustained |
+| Persistent block/K-major FP16-output inputs | **49.143 TFLOPS average** | Former sustained leader from this campaign stage; superseded on 2026-08-25 |
+| Best short persistent block/K-major pass | 49.573 TFLOPS | Historical short result; superseded on 2026-08-25 |
 
 The retained persistent-input leader is a 256x128 N-packed, padding-8 kernel.
 Its K16 loop contains 16 WMMAs, 16 `ds_load_b128` instructions, three
@@ -4996,3 +4998,43 @@ Raw bracket output is
 `/root/wmma-results/compact-xor-mubuf-hand-bracket-20260825.txt`
 (SHA-256
 `c5108455a596b8e011ff5d3794941b25bed435a48bf9cc20f7eb5d896599495b`).
+
+### 2026-08-25: independent hot-B VGPR phase exceeds 50 TFLOPS
+
+The broad delta-2 register shift had produced the largest retained uplift, but
+the older delta-4/delta-6 variants changed both physical register phase and
+runtime residency. A guarded hot-loop-only transform finally separated those
+variables. `tools/rotate_hot_fragment_phase_asm.py` rotates the five WMMA input
+banks through every nonzero offset from -4 to +4, rotates the four-register B
+refill into the vacated slot, and shadows only the loop-invariant addresses
+that overlap. The final K tile is untouched. Every candidate retained 120
+VGPR, 22 SGPR, 18,432 bytes LDS, no scratch, two blocks/16 waves, the exact
+instruction inventory, and the complete selected output tuple.
+
+The uniform phase screen found a repeatable modulo-eight structure. Relative
+to the selected base-4 placement, phases 1/2/5/6 lost roughly 2%, while phases
+0/3/4/7 were near-neutral. No uniform rotation beat the control. That result
+motivated independent operand placement rather than another global shift.
+
+`tools/place_hot_b_phase_asm.py` keeps all four A fragments on phase-4 banks,
+rotates A2/A3 into the old B slots, and places B at a chosen high bank. The
+phase-4 `v108:v115` form reached 49.756 TFLOPS, phase-0 `v112:v119` reached
+49.588, and phase-7 `v111:v118` reached **50.530 TFLOPS** in the short screen,
+between selected controls at 49.552 and 49.524. All were exact. The selected
+form stages the cooperative B refill in `v72:v75` and shadows its vector offset
+and LDS address in `v65`/`v66`. Those are two one-time moves before the loop;
+the repeated instruction stream and 120-VGPR metadata are unchanged.
+
+The required five fresh processes used 20 warmups, five timing blocks, and 100
+iterations per block, alternating candidate/control order. Candidate medians
+were **50.014850, 50.135584, 50.146413, 50.025904, and 50.046643 TFLOPS**
+(**50.073879 average**, 50.014850 floor). Paired selected-image controls
+averaged 49.018881 TFLOPS. Every process reproduced normalized maximum error
+0.018779343, RMS 0.035428338, and cosine similarity 0.999977929 across all
+16,777,216 outputs. The exact +2.152% uplift clears the project's five-process
+50-TFLOPS gate for the persistent block/K16-prepacked FP16-output contract.
+
+Reproduce the phase sweep with `build-hot-fragment-phase.sh` and the selected
+placement with `build-hot-b-phase.sh`. Raw qualification output is
+`/root/wmma-results/hot-b-phase111-qualification-20260825.txt` (SHA-256
+`16cd5054723ec6db71b61ce27b0fe9d7d23f009471b9297d31e815090927c6b7`).
