@@ -4856,9 +4856,11 @@ normalized maximum errors of 1011.5, then 0.224 and 0.0849 as waits and the
 tail were repaired. Giving the tail immutable A/B bases in previously unused
 v111/v112 and rewriting all 32 tail loads to the canonical K32 offsets restored
 the selected full-output tuple: normalized maximum error 0.018779343, RMS
-0.035428338, and cosine 0.999977929. An XML-derived `VA_VSRC`
-`S_WAITCNT_DEPCTR` diagnostic did not change the residual, helping distinguish
-address corruption from ALU source-reuse latency.
+0.035428338, and cosine 0.999977929. A dependency-counter diagnostic did not
+change the residual. Later inspection of the machine-readable XML corrected
+the field name: `0xfe9f` selects `VA_SSRC=0`; RDNA 3.5 exposes `VM_VSRC`,
+`VA_VDST`, and `VA_SSRC`, but no `VA_VSRC` field. The tail repair, rather than
+that diagnostic, established address corruption as the cause.
 
 The final 10-warmup/5x5 screen measured 41.439 TFLOPS between selected K16
 controls at 49.421 and 49.811. The larger LDS stage and doubled load/compute
@@ -4911,3 +4913,60 @@ gain and none of the six candidates passed 50. The contract is closed without
 promotion. `build-shared-k-stride.sh` reproduces it. Raw output is
 `/root/wmma-results/shared-k-stride-qualification-20260824.txt` (SHA-256
 `5a318fe0060d29551d564b0ef621f8d34a4e0a848b932dd000ad7ae708a07e9a`).
+
+### 2026-08-25: padding-free compact-XOR ping-pong
+
+The next architecture removed row padding rather than embedding one operand
+inside it. Each 16-byte half-row uses
+
+```
+slot(row, half) = 2*row + (half ^ ((row >> 2) & 1))
+```
+
+The permutation is bijective and keeps both halves adjacent, while each
+logical 16-row WMMA half visits all eight 16-byte LDS bank phases exactly
+twice. `tools/verify_compact_xor_layout.py` proves those properties
+exhaustively for the 256-row A and 128-row B tiles. A compact A+B K16 stage is
+12 KiB, so two stages occupy 24 KiB and permit a true ping-pong schedule with
+one `S_BARRIER` per K16. This design stays within the 2026-08-06 RDNA 3.5 XML:
+B128 remains the widest LDS operation and `S_BARRIER` remains the only
+workgroup publication primitive.
+
+The source kernel was exact but used 185 VGPR. The first hand image compressed
+A to four eight-VGPR fragments and loaded B just in time through one or two
+recycled banks. Its `K=32` and `K=64` diagnostics were exact, proving the
+permutation and first refill, but repeated `K=128` processes were
+nondeterministic: four reproduced the reference tuple and one had normalized
+maximum error 0.424392439. Full-depth runs consistently failed near 0.38.
+Conservative `lgkmcnt(0)`, separate VMEM address banks, `VA_VDST=0`,
+`HOLD_CNT=0`, and an additional `S_NOP 15` did not repair it.
+
+The XML was load-bearing in interpreting those diagnostics. The operand map
+defines `HOLD_CNT`, `VA_SDST`, `VA_SSRC`, `VA_VCC`, `VA_VDST`, and `VM_VSRC`;
+there is no `VA_VSRC`. Thus `0xfe9f`, used in an early image, waits
+`VA_SSRC<=0`, not a vector source. Four independent B fragments immediately
+restored the complete selected error tuple, isolating in-phase B-register
+recycling as the unsafe transformation rather than the XOR layout, global
+address recurrence, or accumulator latency.
+
+The retained transform keeps all four B fragments, then writes the next A0,
+A1, and B global vectors into each B bank only after that bank's final WMMA.
+This overlaps the refills with later WMMAs without ever reading the recycled
+bank again. Dedicated refill registers disappear, yielding 153 VGPR, 22 SGPR,
+24,576 bytes LDS, no scratch, and two blocks/16 waves. Each two-slice body has
+32 b128 LDS reads, 32 WMMAs, six global loads, six LDS stores, and two
+barriers. It is exact with normalized maximum error 0.018779343, RMS
+0.035428338, and cosine similarity 0.999977929.
+
+The architecture remains slower. A three-warmup smoke reached 45.034 TFLOPS;
+the authoritative 10-warmup/5x10 same-pass bracket measured **43.758 TFLOPS**
+between selected `bp-publish-lgkm0` controls at 49.702 and 49.816 TFLOPS.
+Removing one barrier per K16 does not repay the compact layout's doubled
+fragment-read count and longer publication path. No long qualification is
+warranted. `build-compact-xor-pingpong.sh`,
+`compact_xor_pingpong.hpp`, and
+`tools/patch_compact_xor_pingpong_asm.py` reproduce the retained exact image.
+Raw bracket output is
+`/root/wmma-results/compact-xor-pingpong-stage-in-b-bracket-20260825.txt`
+(SHA-256
+`18d52d19a95f59bfdea32822434b02621dc90df2bbd7b2aa355359d1429917e6`).

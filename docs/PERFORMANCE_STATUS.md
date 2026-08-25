@@ -1815,5 +1815,29 @@ the image; raw output is
 `/root/wmma-results/shared-k-stride-qualification-20260824.txt` (SHA-256
 `5a318fe0060d29551d564b0ef621f8d34a4e0a848b932dd000ad7ae708a07e9a`).
 
+The padding-free compact-XOR experiment then tested a true 24-KiB A/B
+ping-pong stage. Its bijection
+`slot(row,half)=2*row+(half^((row>>2)&1))` distributes each WMMA half evenly
+over all eight 16-byte LDS phases and cuts publication to one monolithic
+barrier per K16. A source image was exact at 185 VGPR. One-, two-, and
+three-bank just-in-time B recycling was not reliable: shallow K diagnostics
+passed, repeated K=128 processes became nondeterministic, and full-depth error
+was about 0.38 normalized. The 2026-08-06 XML also corrected the diagnostic
+interpretation: `0xfe9f` selects `VA_SSRC=0`; RDNA 3.5 has no `VA_VSRC`
+dependency field.
+
+Keeping four independent B fragments restored the complete exactness tuple.
+The retained hand image overwrites each B bank with a refill vector only after
+that fragment's final WMMA, removing dedicated refill registers without
+reusing a fragment in phase. It emits 153 VGPR, 22 SGPR, 24 KiB LDS, no
+scratch, and two blocks/16 waves. A same-pass 10-warmup/5x10 bracket measured
+43.758 TFLOPS between selected controls at 49.702 and 49.816 TFLOPS. The saved
+barrier cannot repay twice as many fragment LDS reads and the longer
+publication path, so the architecture is closed without qualification.
+`build-compact-xor-pingpong.sh` reproduces it; raw output is
+`/root/wmma-results/compact-xor-pingpong-stage-in-b-bracket-20260825.txt`
+(SHA-256
+`18d52d19a95f59bfdea32822434b02621dc90df2bbd7b2aa355359d1429917e6`).
+
 None of these results changes the qualified **49.143-TFLOPS** research leader
 or the requirement for five fresh exact process medians above 50 TFLOPS.

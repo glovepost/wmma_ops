@@ -53,6 +53,9 @@
 #if RECORD_BLOCK_K32_PUBLICATION
 #include <rocm_wmma_gemm/kernel/block_k32_publication.hpp>
 #endif
+#if RECORD_COMPACT_XOR_PINGPONG
+#include <rocm_wmma_gemm/kernel/compact_xor_pingpong.hpp>
+#endif
 
 #include <algorithm>
 #include <bit>
@@ -171,6 +174,9 @@ namespace {
 #ifndef RECORD_BLOCK_K32_PUBLICATION
 #define RECORD_BLOCK_K32_PUBLICATION 0
 #endif
+#ifndef RECORD_COMPACT_XOR_PINGPONG
+#define RECORD_COMPACT_XOR_PINGPONG 0
+#endif
 #ifndef RECORD_BLOCK_SLICE_MAJOR
 #define RECORD_BLOCK_SLICE_MAJOR 0
 #endif
@@ -210,7 +216,7 @@ namespace {
      | RECORD_INTERLEAVED_PINGPONG | RECORD_BLOCK_512X128 \
      | RECORD_B_RESIDENT | RECORD_DIRECT_B_SHARED_A \
      | RECORD_PAIRED_A_HANDOFF | RECORD_EMBEDDED_AB_PINGPONG \
-     | RECORD_BLOCK_K32_PUBLICATION)
+     | RECORD_BLOCK_K32_PUBLICATION | RECORD_COMPACT_XOR_PINGPONG)
 
 constexpr int kM = RECORD_M;
 constexpr int kN = RECORD_N;
@@ -223,7 +229,9 @@ constexpr double kPromotionTargetTflops = 50.0;
 // Tuned parameter order:
 // warps_m, warps_n, warp_tile_m, warp_tile_n, k_slices, single_buffer,
 // swizzle, vector bits, alignment fast path.
-#if RECORD_BLOCK_K32_PUBLICATION
+#if RECORD_COMPACT_XOR_PINGPONG
+using RecordKernel = rocm_wmma_gemm::compact_xor_pingpong_gemm;
+#elif RECORD_BLOCK_K32_PUBLICATION
 using RecordKernel = rocm_wmma_gemm::block_k32_publication_gemm;
 #elif RECORD_EMBEDDED_AB_PINGPONG
 using RecordKernel = rocm_wmma_gemm::embedded_ab_pingpong_gemm;
@@ -727,7 +735,9 @@ int main(int argc, char** argv) {
                                                         : "A-row-prepacked/B-row")
                                 : (RECORD_PREPACK_B ? "A-col/B-col-prepacked"
                                                     : "A-col/B-row-original")),
-        RECORD_BLOCK_K32_PUBLICATION
+        RECORD_COMPACT_XOR_PINGPONG
+            ? "compact-XOR-pingpong"
+            : RECORD_BLOCK_K32_PUBLICATION
             ? "blocked-K32-publication"
             : RECORD_EMBEDDED_AB_PINGPONG
             ? "embedded-padding-ab-pingpong"
