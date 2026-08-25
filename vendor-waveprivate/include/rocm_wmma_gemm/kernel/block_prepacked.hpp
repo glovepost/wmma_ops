@@ -82,6 +82,12 @@ namespace rocm_wmma_gemm
 #ifndef WMMA_BP_WARP_TILE_M
 #define WMMA_BP_WARP_TILE_M 4
 #endif
+#ifndef WMMA_BP_WARP_TILE_N
+#define WMMA_BP_WARP_TILE_N 4
+#endif
+#ifndef WMMA_BP_WIDE_N_192
+#define WMMA_BP_WIDE_N_192 0
+#endif
 #ifndef WMMA_BP_WARP_TILE2_REPAIR
 #define WMMA_BP_WARP_TILE2_REPAIR 0
 #endif
@@ -147,6 +153,7 @@ struct block_prepacked_gemm
         constexpr int block_m = WMMA_BP_BLOCK_M;
         constexpr int block_n = WMMA_BP_BLOCK_N;
         constexpr int warp_tile_m = WMMA_BP_WARP_TILE_M;
+        constexpr int warp_tile_n = WMMA_BP_WARP_TILE_N;
         constexpr int block_k = WMMA_BP_K_SLICES * wmma_tile;
         constexpr int stride_a = block_k + WMMA_BP_PADDING_A;
         constexpr int stride_b = block_k + WMMA_BP_PADDING_B;
@@ -161,13 +168,23 @@ struct block_prepacked_gemm
             = WMMA_BP_HYBRID_A_PINGPONG ? 2 : lds_buffers;
         constexpr int b_lds_buffers
             = WMMA_BP_HYBRID_B_PINGPONG ? 2 : lds_buffers;
-        constexpr int warp_cols = block_n / (4 * wmma_tile);
+        constexpr int warp_cols = block_n / (warp_tile_n * wmma_tile);
         static_assert(((block_m == 128 || block_m == 256)
                        && (block_n == 128 || block_n == 256))
                           || (WMMA_BP_PADDED_EDGES && WMMA_BP_PACK_N
                               && block_m == 192 && block_n == 192
-                              && warp_tile_m == 3),
+                              && ((warp_tile_m == 3 && warp_tile_n == 4)
+                                  || (WMMA_BP_WIDE_N_192
+                                      && warp_tile_m == 3
+                                      && warp_tile_n == 6))),
                       "unsupported block-prepacked geometry");
+        static_assert(!WMMA_BP_WIDE_N_192
+                          || (WMMA_BP_PADDED_EDGES && WMMA_BP_PACK_N
+                              && block_m == 192 && block_n == 192
+                              && warp_tile_m == 3 && warp_tile_n == 6
+                              && !WMMA_BP_DOUBLE_BUFFER
+                              && WMMA_BP_K_SLICES == 1),
+                      "wide-N path specializes padded 192x192 K16");
         static_assert(WMMA_BP_K_SLICES == 1 || WMMA_BP_K_SLICES == 2);
         static_assert((WMMA_BP_FRAGMENT_SKEW_A == 0
                        && WMMA_BP_FRAGMENT_SKEW_B == 0)
@@ -252,7 +269,7 @@ struct block_prepacked_gemm
             + static_cast<size_t>(block_n_index) * k_tiles * b_tile_elements;
 
         const int warp_m_base = warp_row * warp_tile_m * wmma_tile;
-        const int warp_n_base = warp_col * 4 * wmma_tile;
+        const int warp_n_base = warp_col * warp_tile_n * wmma_tile;
 
         u16x8 next_a0;
         u16x8 next_a1;
@@ -260,6 +277,9 @@ struct block_prepacked_gemm
         u16x8 next_b1;
         u16x8 next_a_k2[4];
         u16x8 next_b_k2[2];
+        u16x8 wide_stage0;
+        u16x8 wide_stage1;
+        u16x8 wide_stage2;
 
         auto prefetch_all = [&](const half* next_a, const half* next_b_ptr)
         {
@@ -371,6 +391,51 @@ struct block_prepacked_gemm
                     *reinterpret_cast<u16x8*>(
                         b_lds + b_offset + physical_half) = next_b;
                 }
+            }
+        };
+
+        // Eight-wave 192x192 ownership. Every thread transfers three vectors:
+        // one from each operand plus an A extra in waves 0..3 or a B extra in
+        // waves 4..7. The three generic stage slots are filled only after the
+        // corresponding A fragments' final WMMAs, allowing register reuse.
+        auto prefetch_wide_192 = [&](const half* next_a,
+                                     const half* next_b_ptr,
+                                     int stage)
+        {
+            const u16x8* a_vectors = reinterpret_cast<const u16x8*>(next_a);
+            const u16x8* b_vectors
+                = reinterpret_cast<const u16x8*>(next_b_ptr);
+            if(stage == 0)
+                wide_stage0 = a_vectors[tid];
+            else if(stage == 1)
+                wide_stage1 = b_vectors[tid];
+            else if(tid < 128)
+                wide_stage2 = a_vectors[tid + 256];
+            else
+                wide_stage2 = b_vectors[tid + 128];
+        };
+
+        auto commit_wide_192 = [&]()
+        {
+            const int main_row = tid >> 1;
+            const int main_half = (tid & 1) * 8;
+            *reinterpret_cast<u16x8*>(
+                a_lds + main_row * stride_a + main_half) = wide_stage0;
+            *reinterpret_cast<u16x8*>(
+                b_lds + main_row * stride_b + main_half) = wide_stage1;
+            if(tid < 128)
+            {
+                const int vector = tid + 256;
+                *reinterpret_cast<u16x8*>(
+                    a_lds + (vector >> 1) * stride_a + (vector & 1) * 8)
+                    = wide_stage2;
+            }
+            else
+            {
+                const int vector = tid + 128;
+                *reinterpret_cast<u16x8*>(
+                    b_lds + (vector >> 1) * stride_b + (vector & 1) * 8)
+                    = wide_stage2;
             }
         };
 
@@ -528,6 +593,12 @@ struct block_prepacked_gemm
             asm volatile("s_waitcnt vmcnt(0)" ::: "memory");
             commit_ring_slice(1);
         }
+        else if constexpr(WMMA_BP_WIDE_N_192)
+        {
+            prefetch_wide_192(a_tile, b_tile, 0);
+            prefetch_wide_192(a_tile, b_tile, 1);
+            prefetch_wide_192(a_tile, b_tile, 2);
+        }
         else if constexpr(WMMA_BP_K_SLICES == 1)
             prefetch_all(a_tile, b_tile);
         else
@@ -535,7 +606,9 @@ struct block_prepacked_gemm
         if constexpr(!WMMA_BP_K2_RING)
         {
             __builtin_amdgcn_s_waitcnt(0);
-            if constexpr(WMMA_BP_K_SLICES == 1)
+            if constexpr(WMMA_BP_WIDE_N_192)
+                commit_wide_192();
+            else if constexpr(WMMA_BP_K_SLICES == 1)
                 commit_all();
             else
                 commit_k2();
@@ -544,7 +617,7 @@ struct block_prepacked_gemm
         __syncthreads();
 
         fragment<half, wmma_tile> c_m[2][4];
-        fragment<half, wmma_tile> c_n[4][2];
+        fragment<half, wmma_tile> c_n[4][warp_tile_n / 2];
 
         auto load_half_swizzled = [&](fragment<half, wmma_tile>& frag,
                                       const half* first_source,
@@ -843,6 +916,54 @@ struct block_prepacked_gemm
                                     = reinterpret_cast<const u16x8*>(next_b_ptr);
                                 next_b1 = b_vectors[2 * tid + 1];
                             }
+                        }
+                    }
+                }
+            }
+        };
+
+        auto compute_wide_192 = [&]<bool do_prefetch>(
+                                      const half* next_a,
+                                      const half* next_b_ptr)
+        {
+            static_assert(!WMMA_BP_WIDE_N_192
+                              || (warp_tile_m == 3 && warp_tile_n == 6),
+                          "wide-N fragment partition is fixed at 3x6");
+            fragment<half, wmma_tile> a_frag[3];
+            #pragma unroll
+            for(int wm = 0; wm < 3; ++wm)
+            {
+                const half* source = a_lds
+                    + (warp_m_base + wm * wmma_tile + half_lane) * stride_a;
+                load_matrix<m_input::matrix_a, m_layout::row_major>(
+                    a_frag[wm], source, stride_a, block_k);
+            }
+
+            #pragma unroll
+            for(int wn = 0; wn < 6; ++wn)
+            {
+                fragment<half, wmma_tile> b_frag;
+                const half* source = b_lds
+                    + (warp_n_base + wn * wmma_tile + half_lane) * stride_b;
+                load_matrix<m_input::matrix_b, m_layout::col_major>(
+                    b_frag, source, block_k, stride_b);
+                #pragma unroll
+                for(int wm = 0; wm < 3; ++wm)
+                {
+                    if(wn < 3)
+                        wmma<false>(a_frag[wm], b_frag, c_n[wm][wn]);
+                    else
+                        wmma<true>(a_frag[wm], b_frag, c_n[wm][wn - 3]);
+                    if constexpr(do_prefetch)
+                    {
+                        if(wn == 5)
+                        {
+                            // Prevent LLVM from hoisting the refill across
+                            // the final use of the A fragment whose registers
+                            // should become the corresponding stage slot.
+                            __builtin_amdgcn_sched_barrier(0);
+                            prefetch_wide_192(next_a, next_b_ptr, wm);
+                            __builtin_amdgcn_sched_barrier(0);
                         }
                     }
                 }
@@ -1179,6 +1300,23 @@ struct block_prepacked_gemm
                 __syncthreads();
             }
             compute_k2.template operator()<false>(nullptr, nullptr);
+        }
+        else if constexpr(WMMA_BP_WIDE_N_192)
+        {
+            #pragma unroll 1
+            for(int k_tile = 0; k_tile < k_tiles - 1; ++k_tile)
+            {
+                const half* next_a = a_tile + (k_tile + 1) * a_tile_elements;
+                const half* next_b_ptr
+                    = b_tile + (k_tile + 1) * b_tile_elements;
+                compute_wide_192.template operator()<true>(next_a, next_b_ptr);
+                asm volatile("s_waitcnt vmcnt(0)" ::: "memory");
+                __syncthreads();
+                commit_wide_192();
+                __builtin_amdgcn_s_waitcnt(0x7f);
+                __syncthreads();
+            }
+            compute_wide_192.template operator()<false>(nullptr, nullptr);
         }
         else if constexpr(WMMA_BP_HYBRID_B_PINGPONG)
         {
@@ -1707,28 +1845,28 @@ struct block_prepacked_gemm
         for(int wm = 0; wm < warp_tile_m; ++wm)
         {
             #pragma unroll
-            for(int wn = 0; wn < 4; ++wn)
+            for(int wn = 0; wn < warp_tile_n; ++wn)
             {
 #if WMMA_BP_PAIR_LANE_EPILOGUE
-                if(wn < 2)
+                if(wn < warp_tile_n / 2)
                     store_pair_lane_tile.template operator()<false>(
                         c_n[wm][wn],
                         block_row + warp_m_base + wm * wmma_tile,
                         block_col + warp_n_base + wn * wmma_tile);
                 else
                     store_pair_lane_tile.template operator()<true>(
-                        c_n[wm][wn - 2],
+                        c_n[wm][wn - warp_tile_n / 2],
                         block_row + warp_m_base + wm * wmma_tile,
                         block_col + warp_n_base + wn * wmma_tile);
 #elif WMMA_BP_VECTOR_EPILOGUE
-                if(wn < 2)
+                if(wn < warp_tile_n / 2)
                     store_vector_tile.template operator()<false>(
                         c_n[wm][wn],
                         block_row + warp_m_base + wm * wmma_tile,
                         block_col + warp_n_base + wn * wmma_tile);
                 else
                     store_vector_tile.template operator()<true>(
-                        c_n[wm][wn - 2],
+                        c_n[wm][wn - warp_tile_n / 2],
                         block_row + warp_m_base + wm * wmma_tile,
                         block_col + warp_n_base + wn * wmma_tile);
 #else
@@ -1753,7 +1891,7 @@ struct block_prepacked_gemm
                 }
                 else
                 {
-                    if(wn < 2)
+                    if(wn < warp_tile_n / 2)
 #if WMMA_BP_FULL_TILE_STORE
                         store_full_tile.template operator()<false>(
                             c_n[wm][wn],
@@ -1771,13 +1909,13 @@ struct block_prepacked_gemm
                     else
 #if WMMA_BP_FULL_TILE_STORE
                         store_full_tile.template operator()<true>(
-                            c_n[wm][wn - 2],
+                            c_n[wm][wn - warp_tile_n / 2],
                             block_row + warp_m_base + wm * wmma_tile + half_wave,
                             block_col + warp_n_base + wn * wmma_tile + half_lane);
 #else
                         store_matrix<m_layout::row_major, false, true>(
                             C,
-                            c_n[wm][wn - 2],
+                            c_n[wm][wn - warp_tile_n / 2],
                             block_row + warp_m_base + wm * wmma_tile + half_wave,
                             block_col + warp_n_base + wn * wmma_tile + half_lane,
                             M,

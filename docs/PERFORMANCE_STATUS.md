@@ -1654,5 +1654,27 @@ cost. The geometry is closed. Raw SHA-256 values are
 `50008ee36fba35af2863f64ff5ee1658d8e30534ccd3573529c4f70015e72cac`
 and `8de2600587dd01d44aa336dacd5bf6fa92df72e1a90cd0dabd731c24ac4b5ce7`.
 
+An eight-wave 192x192 follow-up changed each wave from a 48x64 tile to a
+48x96 tile (3x6 WMMAs per K16). This gives two clean wave columns and assigns
+exactly three b128 input vectors to every thread: one A and one B vector for
+all lanes, then an extra A vector in waves 0--3 or B vector in waves 4--7.
+Refills were deliberately placed after each A fragment's final WMMA so LLVM
+could reuse the dead fragment registers. Inspection of the emitted gfx1151
+ISA confirmed the three late `global_load_b128` operations reuse those ranges;
+the image uses 122 VGPR, 26 SGPR, 18 KiB LDS, and no scratch. Its WMMA, wait,
+and monolithic-barrier sequence was checked against the 2026-08-06 RDNA 3.5
+machine-readable ISA XML.
+
+Both placements reproduced the complete selected error tuple and reported
+three resident blocks/24 waves, so this was not an occupancy failure. CU mode
+reached only 33.229 TFLOPS and WGP mode 37.333, between selected-image controls
+at 49.452/49.536. The same 6.35% zero-padding charge applies, but it is far too
+small to explain the deficit. Six accumulators per wave enlarge the fragment
+working set and the three-vector refill schedule cannot overlap enough useful
+work to compensate. The 3x6 ownership is therefore closed without long
+qualification. `build-block-192x192-wide.sh` reproduces both placements. Raw
+SHA-256 is
+`3a92f013b2beb20a1fa96bb0516b9b4c633a8babd134d723954345927ad72e92`.
+
 None of these results changes the qualified **49.143-TFLOPS** research leader
 or the requirement for five fresh exact process medians above 50 TFLOPS.

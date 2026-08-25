@@ -4638,3 +4638,34 @@ closed. `build-block-192x192.sh` reproduces both placements. Raw outputs are
 `50008ee36fba35af2863f64ff5ee1658d8e30534ccd3573529c4f70015e72cac`)
 and `/root/wmma-results/block-192x192-wgp-smoke-20260824.txt` (SHA-256
 `8de2600587dd01d44aa336dacd5bf6fa92df72e1a90cd0dabd731c24ac4b5ce7`).
+
+### 2026-08-24: padded 192x192 eight-wave wide-N architecture
+
+The twelve-wave result left a clean follow-up question: can the symmetric
+block retain its larger useful area while restoring the leader's eight-wave
+workgroup? The wide-N variant uses four wave rows by two wave columns. Each
+wave computes 48x96, or a 3x6 WMMA tile, so the block still covers 192x192.
+The 768 b128 vectors in the A/B K16 tiles divide evenly across 256 threads.
+Every thread loads one A and one B vector; waves 0--3 load one extra A vector,
+and waves 4--7 load one extra B vector.
+
+The source schedules those three refills only after the corresponding A
+fragment's last use. Emitted-ISA inspection confirmed LLVM reused the dead A
+ranges for `global_load_b128 v[88:91]`, `v[92:95]`, and `v[96:99]`. The final
+image has 122 VGPR, 26 SGPR, 18 KiB LDS, no scratch, and 18 WMMA instructions
+per K16. The wait and `S_BARRIER` sequence was also audited against the
+2026-08-06 RDNA 3.5 machine-readable ISA XML; the architecture relies on the
+documented monolithic workgroup barrier rather than a nonexistent split
+signal/wait form.
+
+Full-output validation was exact for both CU and WGP images: normalized maximum
+error 0.018779343, RMS 0.035428338, and cosine 0.999977929. Both reported three
+resident blocks/24 waves. Nevertheless, CU mode reached only 33.229 TFLOPS and
+WGP mode 37.333, while opening/closing selected controls reached 49.452 and
+49.536. The 6.35% padded physical-work charge cannot explain a 12--16-TFLOPS
+gap. The six-accumulator-wide fragment working set and three-load publication
+schedule are the limiting shape, not occupancy. This closes 3x6 ownership;
+small wait edits cannot plausibly recover the deficit.
+`build-block-192x192-wide.sh` reproduces both images. Raw output is
+`/root/wmma-results/block-192x192-wide-smoke-20260824.txt` (SHA-256
+`3a92f013b2beb20a1fa96bb0516b9b4c633a8babd134d723954345927ad72e92`).
