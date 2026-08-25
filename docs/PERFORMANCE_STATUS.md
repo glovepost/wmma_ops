@@ -1693,5 +1693,23 @@ packed-input reuse pattern; the default MUBUF policy remains selected.
 screen. Raw SHA-256 is
 `0234fcb18c3d5ebb105909b4974838d9efd663202ef1b3a5a46c41cbb294c7be`.
 
+The earlier invalid 5x8 mapper splice was resolved without transplanting its
+incompatible source prologue. On the exact 16x32 grid, the selected 16-wide
+XOR-snake mapper has a closed-form inverse. A guarded entry transform now feeds
+it `f^-1(g(workgroup_id))`, where `g` is the 5x8 traversal. An offline proof
+checks all 512 IDs for bijection and coordinate equality. This changes only
+one-time SALU setup and raises the declaration from 22 to 34 SGPR; the entire
+hot loop remains text-identical at 120 VGPR, 18 KiB LDS, and two blocks/16
+waves.
+
+Both the ordinary and cyclically skewed 5x8 forms reproduced the full output
+tuple. They reached 49.242 and 49.067 TFLOPS versus opening/closing selected
+controls at 49.487/49.254. Thus a 40-workgroup supertile is now a valid measured
+mapping, but it does not improve the selected traversal. The exact inverse-ID
+method is retained for future mapping experiments; neither 5x8 form advances.
+`build-workgroup-remap-5x8.sh` and `tools/remap_workgroup_5x8_asm.py` reproduce
+the result. Raw SHA-256 is
+`629424fcbf89ea95514933ec8bf12e87ac78643f1bb097462a8598047af33fad`.
+
 None of these results changes the qualified **49.143-TFLOPS** research leader
 or the requirement for five fresh exact process medians above 50 TFLOPS.

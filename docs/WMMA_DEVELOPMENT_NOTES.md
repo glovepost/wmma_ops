@@ -4702,3 +4702,31 @@ the selected MUBUF encoding unchanged. `build-cache-policy.sh` reproduces all
 forms. Raw output is `/root/wmma-results/cache-policy-screen-20260824.txt`
 (SHA-256
 `0234fcb18c3d5ebb105909b4974838d9efd663202ef1b3a5a46c41cbb294c7be`).
+
+### 2026-08-24: exact inverse-ID 5x8 workgroup remap
+
+The prior mode-5 source image established correctness, but a direct prologue
+splice into the hand kernel was invalid because its downstream SGPR/pointer
+contract differed. The fixed 16x32 record grid permits a cleaner construction.
+Let `f` be the selected period-16 XOR-snake mapping and `g` the desired 5x8
+mapping. `tools/remap_workgroup_5x8_asm.py` computes `f^-1(g(blockIdx.x))` in
+SALU at entry, then lets the original kernel consume that transformed ID.
+Every pointer calculation and every hot-loop instruction therefore remains the
+qualified image's own code.
+
+The inverse was exhaustively checked offline: all 512 transformed IDs are
+unique and `f(transformed_id) == g(original_id)` for both ordinary and
+cyclically skewed 5x8 targets. The assembly uses exact bounded divides
+`x/40 = (x*205)>>13` and `x/5 = (x*205)>>10`; the 32-workgroup tail is mapped
+explicitly. Temporary SGPRs raise the declaration from 22 to 34 without
+changing runtime residency. Both images retain 120 VGPR, 18 KiB LDS, two
+blocks/16 waves, and the selected error tuple.
+
+The unskewed remap reached 49.242 TFLOPS and the skewed remap 49.067, bracketed
+by selected controls at 49.487 and 49.254. The unskewed result is effectively
+the closing control and below the bracket midpoint; the skew is worse. This
+closes the 40-CU 5x8 traversal with a valid hand-schedule comparison while
+retaining the inverse-ID mechanism for other bijective maps.
+`build-workgroup-remap-5x8.sh` reproduces both images. Raw output is
+`/root/wmma-results/workgroup-remap-5x8-screen-20260824.txt` (SHA-256
+`629424fcbf89ea95514933ec8bf12e87ac78643f1bb097462a8598047af33fad`).
