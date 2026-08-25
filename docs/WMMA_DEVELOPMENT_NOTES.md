@@ -4353,3 +4353,22 @@ the clause and 49.072 with the original two-load clause. Candidate range was
 0.067 TFLOPS on average despite remaining exact in every process. Retain
 `s_clause 0x1`; neither instruction deletion nor uninterrupted service for the
 B refill is a promotion. `build-refill-clause.sh` reproduces the screen.
+
+### 2026-08-24: VGPR over-reservation occupancy isolation
+
+The double-buffered B experiment declared 128 VGPR and unexpectedly reported
+three blocks/24 waves, while the 120-VGPR leader reports two blocks/16 waves.
+To isolate metadata from instructions, `tools/patch_vgpr_reservation_asm.py`
+changed only `.amdhsa_next_free_vgpr` and the YAML note count to 121, 124, or
+128. This is safe over-reservation: all instructions still address at most
+`v119`. Removing the two declaration lines gives identical source hashes for
+all four images.
+
+Every variant remained exact. Counts 121/124/128 all exposed three blocks/24
+waves and measured 46.035/46.225/45.823 TFLOPS, respectively. Untouched
+120-VGPR controls measured 49.670 and 49.448 TFLOPS. This proves both that the
+occupancy transition is metadata-driven and that it is undesirable for this
+CU-local shared-LDS schedule. More resident workgroups increase barrier/LDS
+contention enough to lose roughly 3.4 TFLOPS. Keep the exact 120-VGPR extent;
+do not use over-reservation as an occupancy hint. `build-vgpr-reservation.sh`
+reproduces the isolation.

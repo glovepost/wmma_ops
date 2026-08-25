@@ -1508,3 +1508,15 @@ signal. Clause-free candidate medians were 48.929, 48.888, 48.953, 49.085,
 `51f3c59d6feeaa1da3c4b3aaad2ad05bacdf632e264de1cbdf05619139bdee1b`) and
 `/root/wmma-results/refill-clause-qualification-20260824.txt` (SHA-256
 `c0d4133bed5a18b95e257515301cab92be0898be097c6523670c4bf693133942`).
+
+Safe VGPR over-reservation explained the otherwise surprising occupancy seen
+in the 128-VGPR B-pipeline image. Leader variants declared 121, 124, or 128
+VGPR while still using only `v0:v119`; after removing those two metadata fields,
+all four assembly sources had the same SHA-256. Every over-reserved image was
+exact and changed device-reported occupancy from two blocks/16 waves to three
+blocks/24 waves. Throughput fell sharply to 46.035, 46.225, and 45.823 TFLOPS,
+between untouched controls at 49.670 and 49.448. The third CU-local
+LDS-sharing group is a synchronization/contention regression, not free latency
+hiding. Retain the honest 120-VGPR declaration. Raw output is
+`/root/wmma-results/vgpr-reservation-screen-20260824.txt` (SHA-256
+`6fc1f9b063b515c63aba7440306eaf474b5cdf96a7823f2f66ada6137abb53d0`).
