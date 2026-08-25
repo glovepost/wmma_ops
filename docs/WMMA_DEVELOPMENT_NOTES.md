@@ -4053,11 +4053,12 @@ reference (normalized maximum error 0.767344810, RMS 0.668158748, cosine
 0.992118715). The hardware fragment register order is not directly contiguous
 in output memory; no timing from this invalid image is retained.
 
-The same hand schedule was then regenerated with LDS swizzle 8 and 32. Both
+The same hand schedule was then regenerated with workgroup mapping periods 8
+and 32. Both
 variants were exact at unchanged 120-VGPR/two-block occupancy and produced
 49.410/49.439 TFLOPS in short screens. The swizzle-32 form lost in the fresh
 interleaved comparison (48.771 average versus 48.994 for delta-2 controls),
-so alternate bank phases are closed and the default swizzle 16 remains the
+so alternate traversals are closed and the default period 16 remains the
 research base.
 Zero A/B LDS padding was then compiled as a source control. The hand patcher
 correctly refused to apply its p8-specific descriptor rewrite, so no invalid
@@ -4408,3 +4409,18 @@ medians averaged 49.0069 TFLOPS (48.871--49.153); controls averaged 48.9999
 of six pairs favored the candidate. Keep the compiler's size 63 declaration;
 startup prefetch is not the missing 50-TFLOPS gain. `build-inst-pref-size.sh`
 reproduces both stages.
+
+### 2026-08-24: small workgroup mapping periods
+
+`WMMA_BP_SWIZZLE` was previously described imprecisely as an LDS swizzle. In
+`block_prepacked.hpp` it is passed only to `tile_mapper`; it changes the
+workgroup's XOR-snake traversal period and does not alter LDS addresses or bank
+phases. Periods 8 and 32 had already been regenerated through the hand chain,
+but periods 2 and 4 appeared only in an old source build script.
+
+`build-mapping-swizzle-small.sh` compiles each source mapper and applies the
+same scalar-offset MUBUF, progressive publication, delta-2 register phase, and
+LDS-only publication-wait transforms as the selected image. Both candidates
+were exact at 120 VGPR, 22 SGPR, 18 KiB LDS, and two blocks/16 waves. Period 2
+measured 48.534 TFLOPS and period 4 measured 49.375, between period-16 controls
+at 49.701/49.600. The complete tested hand set is now 2/4/8/16/32; retain 16.

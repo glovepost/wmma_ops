@@ -1256,15 +1256,15 @@ but reached **46.809 TFLOPS** in a 10-warmup/10-iteration screen. The smaller
 M stripe loses reuse and cannot repay its additional N-fragment issue work;
 normal 128x256 ownership is closed below delta-2.
 
-### 2026-08-24 hand-scheduled LDS swizzle screen
+### 2026-08-24 hand-scheduled mapping-swizzle screen
 
-The delta-2 register-phase schedule was regenerated with the source LDS
-swizzle changed from 16 to 8 and 32, leaving the tile shape, register phase,
+The delta-2 register-phase schedule was regenerated with the source workgroup
+traversal period changed from 16 to 8 and 32, leaving the tile shape, register phase,
 waits, barriers, and input contract unchanged. Both images passed the complete
 exactness tuple at two blocks/16 waves. Short screens reached 49.410 and
 49.439 TFLOPS respectively, but three fresh interleaved pairs for swizzle 32
 averaged 48.771 TFLOPS versus 48.994 for delta-2 controls. The alternate bank
-phases regress under sustained timing; swizzle 16 remains required.
+traversals regress under sustained timing; period 16 remains required.
 The zero-padding source layout was also rebuilt as a control for the hand
 schedule. The register-phase patch could not be applied because its descriptor
 pattern is specific to the p8 address schedule; the loadable source image
@@ -1544,3 +1544,13 @@ is neutral, not a promotion; retain the compiler default. Raw outputs are
 `cf58d8a255a8cb2188281103253b6818fcc5981ac526efc0d7e2e75e2b32cc89`) and
 `/root/wmma-results/inst-pref-size-qualification-20260824.txt` (SHA-256
 `b6735eeeba1971e90cee5a2b098a2c5395f871a669ad3ea67023e683bf81d907`).
+
+Periods 2 and 4 were subsequently regenerated through the complete current
+hand chain; they had existed only in an older source-level build sweep. Both
+were exact at the same 120-VGPR/22-SGPR/18-KiB resource tuple. Period 2 reached
+48.534 TFLOPS and period 4 reached 49.375, bracketed by period-16 controls at
+49.701 and 49.600. Neither advances, completing the hand-scheduled traversal
+set at 2/4/8/16/32. Note that `WMMA_BP_SWIZZLE` controls the workgroup tile
+mapping, not LDS address swizzling. Raw output is
+`/root/wmma-results/mapping-swizzle-small-screen-20260824.txt` (SHA-256
+`92089904bb1ccb3b0160af25651413737fda32d9b100980cd8ddf106b339696e`).
