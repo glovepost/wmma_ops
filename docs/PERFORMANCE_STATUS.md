@@ -1473,3 +1473,21 @@ does not repay the wider LDS stride and extra staging/fragment state, so compact
 K32 is also closed without qualification. Raw output is
 `/root/wmma-results/warp-tile2-k32-20260824.txt` (SHA-256
 `c2331328ae3ef595c4cbe5607871d665032134928b57e6f630644519147b9150`).
+
+The next hand schedule used the otherwise-free allocation tail `v120:v127` to
+double-buffer B fragments. It issued B1 with the ten initial LDS loads, then
+alternated B2/B3 into the old and new banks. `lgkmcnt(2)` retired the older
+two-load fragment while four current-fragment WMMAs covered the newer pair.
+The candidate preserved all 16 LDS loads, 16 WMMAs, arithmetic, global refill,
+and barriers, and remained full-output exact.
+
+The larger live range declared 128 VGPR and unexpectedly admitted three
+blocks/24 waves at the unchanged 18 KiB LDS footprint, but reached only 46.180
+TFLOPS. Reserving an otherwise-unused 24 KiB group segment capped the identical
+instruction stream at two blocks/16 waves and improved only to 46.470 TFLOPS.
+The loss is therefore intrinsic to the deeper B/LDS pipeline rather than
+extra-residency contention. This path is closed without qualification. Raw
+outputs are `/root/wmma-results/bfrag-pipeline-screen-20260824.txt` (SHA-256
+`803b3dac3529abffd0bd9130a08aa93053947514b1a9df67705ed5bb755c3c9a`) and
+`/root/wmma-results/bfrag-pipeline-cap2-screen-20260824.txt` (SHA-256
+`2a74aa5c40f5b61ed155f8e87ca3ba02feaf12adde3a6850bd98994834581142`).

@@ -4306,3 +4306,28 @@ three blocks/24 waves per CU, then measured 43.902 TFLOPS in a
 performance relative to compact K16 and the leader. The wider LDS stride plus
 additional live staging and fragment state outweigh the saved barriers.
 `build-warp-tile2-k32.sh` preserves the negative result; do not qualify it.
+
+### 2026-08-24: double-buffered B-fragment LDS pipeline
+
+The retained loop's first ten LDS loads feed four A fragments and B0. The next
+three B fragments were each loaded into `v92:v99` immediately before a full
+`lgkmcnt(0)`. Since the 120-VGPR image left `v120:v127` below the next proposed
+allocation boundary, a hand schedule used those registers as an alternate B
+fragment bank.
+
+`tools/pipeline_b_fragments_asm.py` keeps the exact instruction inventory but
+loads B1 with the initial group, issues B2 while B1 is outstanding, and issues
+B3 while B2 is outstanding. Each `lgkmcnt(2)` retires the older two-load pair
+while allowing the next pair to overlap four independent WMMAs. The refill
+clause splits the final B3 group, so the patch explicitly retargets the three
+post-clause consumers as well as the first one. Source-shape and metadata
+guards reject an unrelated assembly image.
+
+The 128-VGPR/18-KiB image was exact at three blocks/24 waves but measured only
+46.180 TFLOPS. To separate scheduling from the surprising occupancy change,
+an identical instruction image declared a 24-KiB group reservation. That
+forced two blocks/16 waves, remained exact, and reached 46.470 TFLOPS. The
+extra waves account for only 0.29 TFLOPS of the loss; the extended B live range
+and deeper LDS queue are themselves slower than the leader's just-in-time
+fragment loads. `build-bfrag-pipeline.sh` reproduces both controls. Do not
+promote or extend this pipeline without new counter evidence.
