@@ -18,6 +18,17 @@ namespace rocm_wmma_gemm
 struct compact_xor_pingpong_gemm
 {
     using u16x8 = uint16_t __attribute__((ext_vector_type(8)));
+    using i32x4 = int32_t __attribute__((ext_vector_type(4)));
+
+    static __device__ __forceinline__ u16x8 buffer_load_vector(
+        __amdgpu_buffer_rsrc_t resource,
+        int vector_byte_offset,
+        int scalar_byte_offset)
+    {
+        const i32x4 words = __builtin_amdgcn_raw_buffer_load_b128(
+            resource, vector_byte_offset, scalar_byte_offset, 0);
+        return __builtin_bit_cast(u16x8, words);
+    }
 
     static __device__ __forceinline__ void load_fragment(
         fragment<half, wmma_tile>& frag,
@@ -82,6 +93,12 @@ struct compact_xor_pingpong_gemm
             + static_cast<size_t>(block_m_index) * k_tiles * a_tile_elements;
         const half* const b_tile = B
             + static_cast<size_t>(block_n_index) * k_tiles * b_tile_elements;
+        const auto a_resource = make_buffer_rsrc(
+            a_tile, static_cast<unsigned>(k_tiles * a_tile_elements
+                                          * sizeof(half)));
+        const auto b_resource = make_buffer_rsrc(
+            b_tile, static_cast<unsigned>(k_tiles * b_tile_elements
+                                          * sizeof(half)));
         const int warp_m_base = warp_row * 4 * wmma_tile;
         const int warp_n_base = warp_col * 4 * wmma_tile;
 
@@ -89,17 +106,25 @@ struct compact_xor_pingpong_gemm
         u16x8 next_a1;
         u16x8 next_b;
 
-        auto prefetch = [&](const half* next_a, const half* next_b_ptr, int part)
+        auto prefetch = [&](int tile, int part)
         {
-            const u16x8* a_vectors = reinterpret_cast<const u16x8*>(next_a);
-            const u16x8* b_vectors
-                = reinterpret_cast<const u16x8*>(next_b_ptr);
+            const int a_tile_bytes
+                = tile * a_tile_elements * static_cast<int>(sizeof(half));
+            const int b_tile_bytes
+                = tile * b_tile_elements * static_cast<int>(sizeof(half));
             if(part == 0)
-                next_a0 = a_vectors[2 * tid];
+                next_a0 = buffer_load_vector(
+                    a_resource, 2 * tid * static_cast<int>(sizeof(u16x8)),
+                    a_tile_bytes);
             else if(part == 1)
-                next_a1 = a_vectors[2 * tid + 1];
+                next_a1 = buffer_load_vector(
+                    a_resource,
+                    (2 * tid + 1) * static_cast<int>(sizeof(u16x8)),
+                    a_tile_bytes);
             else if(part == 2)
-                next_b = b_vectors[tid];
+                next_b = buffer_load_vector(
+                    b_resource, tid * static_cast<int>(sizeof(u16x8)),
+                    b_tile_bytes);
         };
 
         auto commit = [&](int buffer)
@@ -119,9 +144,9 @@ struct compact_xor_pingpong_gemm
                 b_lds + b_buffer + b_row * block_k + b_physical_half) = next_b;
         };
 
-        prefetch(a_tile, b_tile, 0);
-        prefetch(a_tile, b_tile, 1);
-        prefetch(a_tile, b_tile, 2);
+        prefetch(0, 0);
+        prefetch(0, 1);
+        prefetch(0, 2);
         asm volatile("s_waitcnt vmcnt(0)" ::: "memory");
         commit(0);
         asm volatile("s_waitcnt lgkmcnt(0)" ::: "memory");
@@ -132,8 +157,7 @@ struct compact_xor_pingpong_gemm
         auto compute_step = [&]<int current_buffer,
                                 int next_buffer,
                                 bool do_prefetch>(
-                                    const half* next_a,
-                                    const half* next_b_ptr)
+                                    int next_tile)
         {
             constexpr int a_current = current_buffer * a_tile_elements;
             constexpr int b_current = current_buffer * b_tile_elements;
@@ -155,7 +179,7 @@ struct compact_xor_pingpong_gemm
             for(int wn = 0; wn < 4; ++wn)
             {
                 if constexpr(do_prefetch)
-                    prefetch(next_a, next_b_ptr, wn);
+                    prefetch(next_tile, wn);
 
                 const int row
                     = warp_n_base + wn * wmma_tile + half_lane;
@@ -190,16 +214,14 @@ struct compact_xor_pingpong_gemm
         for(int k_tile = 0; k_tile < k_tiles; k_tile += 2)
         {
             compute_step.template operator()<0, 1, true>(
-                a_tile + (k_tile + 1) * a_tile_elements,
-                b_tile + (k_tile + 1) * b_tile_elements);
+                k_tile + 1);
             // The final refill wraps to a valid tile and is deliberately
             // discarded.  Keeping both phases structurally identical avoids
             // LLVM's separately allocated 184-VGPR tail; its one-time cost is
             // amortized over the 256 K16 slices of the record shape.
             const int following = k_tile + 2 < k_tiles ? k_tile + 2 : 0;
             compute_step.template operator()<1, 0, true>(
-                a_tile + following * a_tile_elements,
-                b_tile + following * b_tile_elements);
+                following);
         }
 
         #pragma unroll

@@ -46,60 +46,48 @@ def wmma_group(b_source: int, outputs: tuple[int, ...],
     ]
 
 
-def remap_control(text: str) -> str:
-    register_map = {
-        **{105 + i: 145 + i for i in range(4)},
-        **{181 + i: 149 + i for i in range(4)},
-    }
-
-    def remap_range(match: re.Match[str]) -> str:
-        low = int(match.group(1))
-        high = int(match.group(2))
-        mapped = [register_map.get(value, value)
-                  for value in range(low, high + 1)]
-        if mapped != list(range(mapped[0], mapped[-1] + 1)):
-            raise SystemExit(f"non-contiguous control range v[{low}:{high}]")
-        return f"v[{mapped[0]}:{mapped[-1]}]"
-
-    text = re.sub(r"v\[([0-9]+):([0-9]+)\]", remap_range, text)
-    return re.sub(
-        r"\bv([0-9]+)\b",
-        lambda match: f"v{register_map.get(int(match.group(1)), int(match.group(1)))}",
-        text,
-    )
-
-
 def phase_loads(a_first: int, a_second: int,
                 b_first: int, b_second: int) -> list[str]:
     lines: list[str] = []
     lines += load_pair(73, a_first, a_second, 0)
     lines += load_pair(81, a_first, a_second, 512)
+    # Match the selected kernel's readiness order: B0 follows A0/A1 so the
+    # first two WMMAs can issue with four LDS operations still outstanding.
+    lines += load_pair(105, b_first, b_second, 0)
     lines += load_pair(89, a_first, a_second, 1024)
     lines += load_pair(97, a_first, a_second, 1536)
-    lines += load_pair(105, b_first, b_second, 0)
-    lines += load_pair(113, b_first, b_second, 512)
-    lines += load_pair(121, b_first, b_second, 1024)
-    lines += load_pair(129, b_first, b_second, 1536)
     return lines
 
 
-def phase_compute(a_address: int, b_address: int) -> list[str]:
-    lines: list[str] = ["\ts_waitcnt lgkmcnt(0)"]
-    lines += wmma_group(105, (57, 41, 25, 9), False)
+def phase_compute(b_first: int, b_second: int,
+                  a_soffset: int, b_soffset: int) -> list[str]:
+    first_group = wmma_group(105, (57, 41, 25, 9), False)
+    lines: list[str] = ["\ts_waitcnt lgkmcnt(4)"]
+    lines += first_group[:2]
+    lines.append("\ts_waitcnt lgkmcnt(2)")
+    lines.append(first_group[2])
+    lines.append("\ts_waitcnt lgkmcnt(0)")
+    lines.append(first_group[3])
     # B0 is dead after this group.  Stage both next-tile A halves in its eight
     # VGPRs while the remaining twelve WMMAs execute.
     lines += [
         "\ts_clause 0x1",
-        f"\tglobal_load_b128 v[105:108], v[{a_address}:{a_address + 1}], off",
-        f"\tglobal_load_b128 v[109:112], v[{a_address}:{a_address + 1}], off offset:16",
+        f"\tbuffer_load_b128 v[105:108], v66, s[0:3], s{a_soffset} offen",
+        f"\tbuffer_load_b128 v[109:112], v70, s[0:3], s{a_soffset} offen",
     ]
+    lines += load_pair(113, b_first, b_second, 512)
+    lines.append("\ts_waitcnt lgkmcnt(0)")
     lines += wmma_group(113, (49, 33, 17, 1), False)
     # B1 is likewise dead; its low half is enough for the cooperative B
     # refill.  No subsequent WMMA reads either recycled bank.
     lines += [
-        f"\tglobal_load_b128 v[113:116], v[{b_address}:{b_address + 1}], off",
+        f"\tbuffer_load_b128 v[113:116], v67, s[4:7], s{b_soffset} offen",
     ]
+    lines += load_pair(121, b_first, b_second, 1024)
+    lines.append("\ts_waitcnt lgkmcnt(0)")
     lines += wmma_group(121, (57, 41, 25, 9), True)
+    lines += load_pair(129, b_first, b_second, 1536)
+    lines.append("\ts_waitcnt lgkmcnt(0)")
     lines += wmma_group(129, (49, 33, 17, 1), True)
     return lines
 
@@ -116,92 +104,101 @@ def main() -> int:
     body = source[loop_start:loop_end]
     suffix = source[loop_end:]
 
-    first_load = body.index("\tds_load_b128 v[105:108], v73\n")
-    first_commit = body.index(
-        "\t;;#ASMSTART\n\ts_waitcnt vmcnt(0)\n", first_load)
-    following_load_end = body.index(
-        "\tglobal_load_b128 v[177:180], v[183:184], off\n",
-        first_commit,
-    ) + len("\tglobal_load_b128 v[177:180], v[183:184], off\n")
-    second_load = body.index("\tds_load_b128 v[105:108], v89\n")
-    second_commit = body.index(
-        "\t;;#ASMSTART\n\ts_waitcnt vmcnt(0)\n", second_load)
-    second_compute = body.index(
-        "\tv_wmma_f16_16x16x16_f16", second_commit)
-    footer = body.index(
-        "\t;;#ASMSTART\n\ts_waitcnt lgkmcnt(0)\n", second_compute)
-
-    control0 = remap_control(body[:first_load])
-    publish0 = remap_control(body[first_commit:following_load_end])
-    publish1 = remap_control(body[second_commit:second_compute])
-    initial_prefetch = (
-        "\ts_clause 0x1\n"
-        "\tglobal_load_b128 v[169:172], v[105:106], off\n"
-        "\tglobal_load_b128 v[173:176], v[105:106], off offset:16\n"
-        "\tglobal_load_b128 v[177:180], v[107:108], off\n"
-    )
-    following_prefetch = (
-        "\ts_clause 0x1\n"
-        "\tglobal_load_b128 v[169:172], v[181:182], off\n"
-        "\tglobal_load_b128 v[173:176], v[181:182], off offset:16\n"
-        "\tglobal_load_b128 v[177:180], v[183:184], off\n"
-    )
-    control0 = replace_once(
-        control0, remap_control(initial_prefetch), "", "initial prefetch")
-    publish0 = replace_once(
-        publish0, remap_control(following_prefetch), "", "following prefetch")
-    for old, new in (
-        ("v[169:172]", "v[105:108]"),
-        ("v[173:176]", "v[109:112]"),
-        ("v[177:180]", "v[113:116]"),
+    # These anchors deliberately describe the compiler's valid raw-buffer
+    # resource layout.  In particular, the descriptors in s[0:3]/s[4:7] come
+    # from __builtin_amdgcn_make_buffer_rsrc; reconstructing them from flat
+    # pointers loses the AMDGPU aperture bits and faults on gfx1151.
+    for anchor in (
+        "\tbuffer_load_b128 v[168:171], v66, s[0:3], s11 offen\n",
+        "\tbuffer_load_b128 v[176:179], v67, s[4:7], s14 offen\n",
+        "\tds_load_b128 v[104:107], v72\n",
+        "\tds_load_b128 v[104:107], v88\n",
+        "\ts_cbranch_scc0 .LBB0_13\n",
     ):
-        publish0 = publish0.replace(old, new)
-        publish1 = publish1.replace(old, new)
-    publish1 = replace_once(
-        publish1,
-        "\ts_waitcnt lgkmcnt(11)\n",
-        "",
-        "compiler phase-1 readiness wait",
+        if body.count(anchor) != 1:
+            raise SystemExit(f"source loop anchor {anchor.strip()!r} changed")
+
+    control0 = (
+        ".LBB0_13:\n"
+        "\ts_cmp_lt_i32 s15, s10\n"
+        "\ts_cselect_b32 s18, s15, 0\n"
+        "\ts_lshl_b32 s19, s18, 13\n"
+        "\ts_lshl_b32 s18, s18, 12\n"
     )
-    loop_footer = body[footer:]
+    publish0 = (
+        "\ts_addk_i32 s14, 0x2000\n"
+        "\ts_addk_i32 s11, 0x4000\n"
+        "\ts_waitcnt vmcnt(2)\n"
+        "\tds_store_b128 v68, v[105:108] offset:8192\n"
+        "\ts_waitcnt vmcnt(1)\n"
+        "\tds_store_b128 v69, v[109:112] offset:8192\n"
+        "\ts_waitcnt vmcnt(0)\n"
+        "\tds_store_b128 v71, v[113:116] offset:4096\n"
+        "\ts_waitcnt lgkmcnt(0)\n"
+        "\ts_barrier\n"
+    )
+    publish1 = (
+        "\ts_add_i32 s18, s15, 2\n"
+        "\ts_cmp_ge_i32 s15, s10\n"
+        "\ts_mov_b32 s15, s18\n"
+        "\ts_waitcnt vmcnt(2)\n"
+        "\tds_store_b128 v68, v[105:108]\n"
+        "\ts_waitcnt vmcnt(1)\n"
+        "\tds_store_b128 v69, v[109:112]\n"
+        "\ts_waitcnt vmcnt(0)\n"
+        "\tds_store_b128 v71, v[113:116]\n"
+        "\ts_waitcnt lgkmcnt(0)\n"
+        "\ts_barrier\n"
+    )
+    loop_footer = (
+        "\ts_cbranch_scc0 .LBB0_13\n"
+        "; %bb.14:\n"
+        "\tv_mov_b32_e32 v70, v65\n"
+    )
 
     new_body = "\n".join(
         control0.rstrip("\n").splitlines()
         + phase_loads(137, 138, 139, 140)
-        + phase_compute(145, 147)
+        + phase_compute(139, 140, 11, 14)
         + publish0.rstrip("\n").splitlines()
         + phase_loads(141, 142, 143, 144)
-        + phase_compute(149, 151)
+        + phase_compute(143, 144, 19, 18)
         + publish1.rstrip("\n").splitlines()
         + loop_footer.rstrip("\n").splitlines()
     ) + "\n"
 
     prefix = replace_once(
         prefix,
-        "\ts_mov_b32 s3, 0\n",
-        "\ts_mov_b32 s3, 0\n"
-        "\tv_mov_b32_e32 v137, v73\n"
-        "\tv_mov_b32_e32 v138, v74\n"
-        "\tv_mov_b32_e32 v139, v81\n"
-        "\tv_mov_b32_e32 v140, v82\n"
-        "\tv_mov_b32_e32 v141, v89\n"
-        "\tv_mov_b32_e32 v142, v90\n"
-        "\tv_mov_b32_e32 v143, v97\n"
-        "\tv_mov_b32_e32 v144, v98\n",
+        "\ts_movk_i32 s11, 0x2000\n"
+        "\ts_mov_b32 s15, 2\n"
+        "\ts_movk_i32 s14, 0x1000\n"
+        "\ts_mov_b32 s7, s3\n",
+        "\ts_movk_i32 s11, 0x2000\n"
+        "\ts_mov_b32 s15, 2\n"
+        "\ts_movk_i32 s14, 0x1000\n"
+        "\ts_mov_b32 s7, s3\n"
+        "\tv_mov_b32_e32 v137, v72\n"
+        "\tv_mov_b32_e32 v138, v73\n"
+        "\tv_mov_b32_e32 v139, v80\n"
+        "\tv_mov_b32_e32 v140, v81\n"
+        "\tv_mov_b32_e32 v141, v88\n"
+        "\tv_mov_b32_e32 v142, v89\n"
+        "\tv_mov_b32_e32 v143, v96\n"
+        "\tv_mov_b32_e32 v144, v97\n",
         "canonical XOR bases",
     )
 
     source = prefix + new_body + suffix
     source = replace_once(
         source,
-        "\t\t.amdhsa_next_free_vgpr 185\n",
-        "\t\t.amdhsa_next_free_vgpr 153\n",
+        "\t\t.amdhsa_next_free_vgpr 180\n",
+        "\t\t.amdhsa_next_free_vgpr 145\n",
         "VGPR declaration",
     )
     source = replace_once(
         source,
-        "    .vgpr_count:     185\n",
-        "    .vgpr_count:     153\n",
+        "    .vgpr_count:     180\n",
+        "    .vgpr_count:     145\n",
         "VGPR metadata",
     )
 
@@ -211,7 +208,7 @@ def main() -> int:
         for pair in re.findall(r"v\[([0-9]+):([0-9]+)\]", source)
         for value in pair
     )
-    if max(registers) > 152:
+    if max(registers) > 144:
         raise SystemExit(f"compressed image still addresses v{max(registers)}")
     if new_body.count("\tds_load_b128") != 32:
         raise SystemExit("hot pair must contain 32 b128 LDS reads")
@@ -219,7 +216,7 @@ def main() -> int:
         raise SystemExit("hot pair must contain 32 WMMAs")
     if new_body.count("\ts_barrier") != 2:
         raise SystemExit("hot pair must contain one barrier per K16")
-    if new_body.count("\tglobal_load_b128") != 6:
+    if new_body.count("\tbuffer_load_b128") != 6:
         raise SystemExit("hot pair must contain three refills per K16")
     if new_body.count("\tds_store_b128") != 6:
         raise SystemExit("hot pair must publish three vectors per K16")

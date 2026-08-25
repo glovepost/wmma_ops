@@ -4932,10 +4932,11 @@ one `S_BARRIER` per K16. This design stays within the 2026-08-06 RDNA 3.5 XML:
 B128 remains the widest LDS operation and `S_BARRIER` remains the only
 workgroup publication primitive.
 
-The source kernel was exact but used 185 VGPR. The first hand image compressed
-A to four eight-VGPR fragments and loaded B just in time through one or two
-recycled banks. Its `K=32` and `K=64` diagnostics were exact, proving the
-permutation and first refill, but repeated `K=128` processes were
+The original flat-load source kernel was exact but used 185 VGPR. The first
+hand image compressed A to four eight-VGPR fragments and loaded B just in time
+through one or two recycled banks. Its `K=32` and `K=64` diagnostics were
+exact, proving the permutation and first refill, but repeated `K=128`
+processes were
 nondeterministic: four reproduced the reference tuple and one had normalized
 maximum error 0.424392439. Full-depth runs consistently failed near 0.38.
 Conservative `lgkmcnt(0)`, separate VMEM address banks, `VA_VDST=0`,
@@ -4949,24 +4950,49 @@ restored the complete selected error tuple, isolating in-phase B-register
 recycling as the unsafe transformation rather than the XOR layout, global
 address recurrence, or accumulator latency.
 
-The retained transform keeps all four B fragments, then writes the next A0,
-A1, and B global vectors into each B bank only after that bank's final WMMA.
-This overlaps the refills with later WMMAs without ever reading the recycled
-bank again. Dedicated refill registers disappear, yielding 153 VGPR, 22 SGPR,
-24,576 bytes LDS, no scratch, and two blocks/16 waves. Each two-slice body has
-32 b128 LDS reads, 32 WMMAs, six global loads, six LDS stores, and two
-barriers. It is exact with normalized maximum error 0.018779343, RMS
-0.035428338, and cosine similarity 0.999977929.
+The safe transform keeps all four B fragments, then writes the next A0, A1,
+and B global vectors into each B bank only after that bank's final WMMA. This
+overlaps refills with later WMMAs without ever reading the recycled bank
+again. The first exact schedule removed the dedicated refill registers at 153
+VGPR and reached 46.484 TFLOPS in a three-warmup smoke
+(`/root/wmma-results/compact-xor-pingpong-progressive4b-smoke-20260825.txt`,
+SHA-256
+`74b76ed5de96a749438f0937c20eac527907c5c2728b0c246aed0d1086de9f35`).
 
-The architecture remains slower. A three-warmup smoke reached 45.034 TFLOPS;
-the authoritative 10-warmup/5x10 same-pass bracket measured **43.758 TFLOPS**
-between selected `bp-publish-lgkm0` controls at 49.702 and 49.816 TFLOPS.
-Removing one barrier per K16 does not repay the compact layout's doubled
-fragment-read count and longer publication path. No long qualification is
-warranted. `build-compact-xor-pingpong.sh`,
+The next iteration replaced flat global loads and their vector address
+recurrence with MUBUF loads. This had to start in C++ by constructing
+`a_resource` and `b_resource` with `make_buffer_rsrc`, which lowers to
+`__builtin_amdgcn_make_buffer_rsrc`. Reinterpreting the compiler's flat
+pointer SGPRs as a resource descriptor was invalid: several hand-built SRDs
+faulted even at K=32 because the flat pointer representation does not carry
+the descriptor/aperture form expected by `BUFFER_LOAD_B128`. The compiler's
+resources in `s[0:3]` and `s[4:7]` are therefore preserved verbatim by the
+assembly transform.
+
+The source MUBUF image is exact at 180 VGPR, 22 SGPR, 24,576 bytes LDS, no
+scratch, and one block/eight waves. A short smoke reached 46.038 TFLOPS
+(`/root/wmma-results/compact-xor-pingpong-mubuf-source-smoke-20260825.txt`,
+SHA-256
+`cecad8170fcec8a99750bc4d193e1a5ccf0ea57f36f32f48b91eb6324c755438`).
+The retained hand image stages refills into dead B0/B1 banks, keeps four
+independent B fragments, and emits 145 VGPR, 22 SGPR, 24,576 bytes LDS, no
+scratch, and two blocks/16 waves. Each two-slice body has 32 b128 LDS reads,
+32 WMMAs, six MUBUF loads, six LDS stores, and two barriers. It passed the
+K=32 gate with normalized maximum error 0.001411433 and full K=4096 with the
+selected tuple: normalized maximum error 0.018779343, RMS 0.035428338, and
+cosine similarity 0.999977929.
+
+The architecture remains slower. The authoritative MUBUF 10-warmup/5x10
+same-pass bracket measured **45.945 TFLOPS** between selected
+`bp-publish-lgkm0` controls at 49.887 and 49.790 TFLOPS. A static comparison
+corrected the earlier explanation: both compact-XOR and the selected leader
+issue 16 b128 fragment LDS reads per K16. Compact-XOR instead loses time in
+its front-loaded LDS dependency schedule and refill/publication critical
+path. Removing one barrier per K16 does not repay those costs, so no long
+qualification is warranted. `build-compact-xor-pingpong.sh`,
 `compact_xor_pingpong.hpp`, and
 `tools/patch_compact_xor_pingpong_asm.py` reproduce the retained exact image.
 Raw bracket output is
-`/root/wmma-results/compact-xor-pingpong-stage-in-b-bracket-20260825.txt`
+`/root/wmma-results/compact-xor-mubuf-hand-bracket-20260825.txt`
 (SHA-256
-`18d52d19a95f59bfdea32822434b02621dc90df2bbd7b2aa355359d1429917e6`).
+`c5108455a596b8e011ff5d3794941b25bed435a48bf9cc20f7eb5d896599495b`).
