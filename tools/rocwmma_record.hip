@@ -174,6 +174,9 @@ namespace {
 #ifndef RECORD_BLOCK_SLICE_MAJOR
 #define RECORD_BLOCK_SLICE_MAJOR 0
 #endif
+#ifndef RECORD_BLOCK_B_TILE_STRIDE_MULTIPLIER
+#define RECORD_BLOCK_B_TILE_STRIDE_MULTIPLIER 1
+#endif
 #ifndef RECORD_PRODUCER_WAVES
 #define RECORD_PRODUCER_WAVES 5
 #endif
@@ -283,6 +286,11 @@ static_assert(!RECORD_PADDED_BLOCK_CONTRACT || RECORD_BLOCK_CONTRACT,
               "padded edges apply only to a block-prepacked contract");
 static_assert(!RECORD_PADDED_BLOCK_CONTRACT || kK % kBlockK == 0,
               "padded edges do not pad the reduction dimension");
+static_assert(RECORD_BLOCK_B_TILE_STRIDE_MULTIPLIER >= 1,
+              "B tile stride multiplier must be positive");
+static_assert(RECORD_BLOCK_CONTRACT
+                  || RECORD_BLOCK_B_TILE_STRIDE_MULTIPLIER == 1,
+              "B tile stride padding requires a block/K contract");
 
 double median(std::vector<float> values) {
     std::sort(values.begin(), values.end());
@@ -350,7 +358,9 @@ int main(int argc, char** argv) {
         std::vector<half> packed_a(
             static_cast<size_t>(m_blocks) * block_m * kK);
         std::vector<half> packed_b(
-            static_cast<size_t>(n_blocks) * block_n * kK);
+            static_cast<size_t>(n_blocks) * (kK / block_k)
+            * block_n * block_k
+            * RECORD_BLOCK_B_TILE_STRIDE_MULTIPLIER);
         for (int bm = 0; bm < m_blocks; ++bm) {
             for (int bk = 0; bk < kK / block_k; ++bk) {
                 for (int m = 0; m < block_m; ++m) {
@@ -387,21 +397,19 @@ int main(int argc, char** argv) {
             for (int bk = 0; bk < kK / block_k; ++bk) {
                 for (int n = 0; n < block_n; ++n) {
                     for (int k = 0; k < block_k; ++k) {
-                        const size_t packed = RECORD_BLOCK_SLICE_MAJOR
-                            ? ((((static_cast<size_t>(bn) * (kK / block_k)
-                                      + bk)
-                                     * (block_k / rocm_wmma_gemm::wmma_tile)
-                                 + k / rocm_wmma_gemm::wmma_tile)
-                                    * block_n
-                                + n)
-                                   * rocm_wmma_gemm::wmma_tile
-                               + k % rocm_wmma_gemm::wmma_tile)
-                            : (((static_cast<size_t>(bn) * (kK / block_k)
-                                    + bk)
-                                   * block_n
-                               + n)
-                                  * block_k
-                              + k);
+                        const size_t tile_base =
+                            (static_cast<size_t>(bn) * (kK / block_k) + bk)
+                            * block_n * block_k
+                            * RECORD_BLOCK_B_TILE_STRIDE_MULTIPLIER;
+                        const size_t packed = tile_base
+                            + (RECORD_BLOCK_SLICE_MAJOR
+                                   ? ((static_cast<size_t>(
+                                           k / rocm_wmma_gemm::wmma_tile)
+                                           * block_n
+                                       + n)
+                                          * rocm_wmma_gemm::wmma_tile
+                                      + k % rocm_wmma_gemm::wmma_tile)
+                                   : static_cast<size_t>(n) * block_k + k);
                         const int logical_n = bn * block_n + n;
                         if (logical_n < kN) {
                             const size_t logical =
@@ -708,7 +716,9 @@ int main(int argc, char** argv) {
         kM, kN, kK, kBlockM, kBlockN, kBlockK, warmup, kTimingBlocks, iterations,
         offset_a, offset_b, offset_c, combined_ab ? "combined-ab" : "separate",
         RECORD_BLOCK_CONTRACT
-            ? (RECORD_PADDED_BLOCK_CONTRACT
+            ? (RECORD_BLOCK_B_TILE_STRIDE_MULTIPLIER > 1
+                   ? "A/B-block-K16-prepacked-B-stride-padded"
+                   : RECORD_PADDED_BLOCK_CONTRACT
                    ? "A/B-block-K16-prepacked-zero-padded-edges"
                    : RECORD_BLOCK_SLICE_MAJOR
                    ? "A/B-block-K32-slice-prepacked"

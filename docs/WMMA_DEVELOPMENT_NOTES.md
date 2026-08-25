@@ -4870,3 +4870,44 @@ widening K alone. `build-block-k32-publication.sh`,
 and `tools/patch_k32_publication_asm.py` reproduce the image. Raw output is
 `/root/wmma-results/k32-publication-selected-screen-20260824.txt` (SHA-256
 `abf771ec2a470b55b0b1519054a6b11a89927d9aa8609e21a23abee9028f334e`).
+
+### 2026-08-24: shared A/B K-tile offset through padded B prepacking
+
+The selected block contract advances A by 8 KiB and B by 4 KiB for every K16
+tile. That requires independent `s7`/`s18` offset chains and two hot-loop
+`s_addk_i32` instructions. A new host-side contract pads each physical B tile
+to 8 KiB, leaving its 4-KiB payload unchanged and zero-filling the second half.
+The B representation doubles from 32 to 64 MiB for the 4096-square record
+shape, while A and the timed arithmetic remain unchanged.
+
+`tools/patch_shared_k_stride_asm.py` makes three guarded ISA changes to the
+selected image:
+
+1. Change the per-B-block base shift from 12 to 13 for the doubled physical
+   block stride.
+2. Use A's `s7` K offset for the B refill MUBUF instruction.
+3. Delete the independent `s18` initialization and repeated 4-KiB increment.
+
+The hot loop is therefore one SALU instruction shorter. It retains byte-for-
+byte identical WMMA, LDS, MUBUF, wait, barrier, and branch sequences otherwise,
+along with 120 VGPR, 22 SGPR, 18,432 bytes LDS, no scratch, and two blocks/16
+waves. `tools/rocwmma_record.hip` packs and reports the padded contract while
+restoring the original compact matrix before its independent rocBLAS check.
+
+The first address transform updated only the per-K stride and produced a large
+validation failure: later N blocks still used the compact block-base shift.
+Correcting that outer stride restored normalized maximum error 0.018779343,
+RMS error 0.035428338, and cosine similarity 0.999977929. The repaired
+three-warmup smoke run reached 51.182 TFLOPS and passed the harness promotion
+predicate, making a full qualification mandatory rather than optional.
+
+Six alternating-order 20-warmup/100-iteration pairs then measured candidate
+medians of 48.519785, 48.722039, 48.936237, 49.041612, 48.926547, and
+49.022873 TFLOPS: 48.861515 average, 48.519785 floor. Paired compact-stride
+controls averaged 48.847264 TFLOPS. The candidate won three pairs and gained
+only 0.014252 TFLOPS (+0.029%) on the mean. The isolated crossing was a short
+power/clock excursion; one removed SALU instruction does not create a durable
+gain and none of the six candidates passed 50. The contract is closed without
+promotion. `build-shared-k-stride.sh` reproduces it. Raw output is
+`/root/wmma-results/shared-k-stride-qualification-20260824.txt` (SHA-256
+`5a318fe0060d29551d564b0ef621f8d34a4e0a848b932dd000ad7ae708a07e9a`).

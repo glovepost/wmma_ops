@@ -1792,5 +1792,28 @@ the result. Raw output is
 `/root/wmma-results/k32-publication-selected-screen-20260824.txt` (SHA-256
 `abf771ec2a470b55b0b1519054a6b11a89927d9aa8609e21a23abee9028f334e`).
 
+The next prepacking experiment aligned the physical K-tile strides of A and B.
+A 256x16 A tile advances by 8 KiB, while the compact 128x16 B tile advances by
+4 KiB. Padding each B tile to 8 KiB lets both refill streams use the same
+scalar offset. A guarded assembly transform changes the B block-base shift from
+12 to 13, retargets the hot B MUBUF load from `s18` to A's `s7`, and removes
+the separate B-offset initialization and repeated `s_addk_i32`. The repeated
+loop is one SALU instruction shorter, with unchanged WMMAs, memory operations,
+barriers, 120 VGPR, 22 SGPR, 18 KiB LDS, and two blocks/16 waves. The cost is a
+2x persistent B representation (64 MiB rather than 32 MiB at 4096 squared).
+
+An exact three-warmup smoke process reached 51.182 TFLOPS, but the standard
+long qualification rejected it. Six alternating-order 20-warmup/100-iteration
+candidate processes measured 48.520, 48.722, 48.936, 49.042, 48.927, and
+49.023 TFLOPS (48.862 average). Their paired compact-stride controls averaged
+48.847 TFLOPS. The candidate won three of six pairs and its +0.014-TFLOPS
+(+0.029%) mean delta is noise, far below the five-process >50 requirement.
+Every process reproduced the complete selected error tuple. Shared-stride B
+prepacking is retained as a reproducible negative result, not a promotion.
+`build-shared-k-stride.sh` and `tools/patch_shared_k_stride_asm.py` reproduce
+the image; raw output is
+`/root/wmma-results/shared-k-stride-qualification-20260824.txt` (SHA-256
+`5a318fe0060d29551d564b0ef621f8d34a4e0a848b932dd000ad7ae708a07e9a`).
+
 None of these results changes the qualified **49.143-TFLOPS** research leader
 or the requirement for five fresh exact process medians above 50 TFLOPS.
