@@ -1638,5 +1638,21 @@ worse. Ordinary arbitration remains selected. Raw SHA-256 values are
 `5f4d5ef8027e8fdb6b416ab3a9d5c9e70fef8a886c1af90913630403f8b0e940`
 and `87531467e660c58ed3c7c816e7ac3e1cbb3e0e9e249e67915c59bbcbaab63f46`.
 
+A new symmetric 192x192 architecture used four-by-three waves, 48x64 work per
+wave, exact one-vector-per-thread operand ownership, 115 VGPR, 22 SGPR, and the
+same 18 KiB LDS footprint as the leader. The harness now supports honest
+zero-padded block contracts for non-divisor tiles: M/N pack to 4224 outside
+timing, edge stores remain bounded to 4096, and only logical 4096-cubed work is
+reported. Full-output validation reproduced the selected error tuple.
+
+CU mode admitted one block/12 waves and reached 42.757 TFLOPS versus
+49.399/49.437 controls. Changing only the code-object placement to WGP exposed
+three blocks/36 waves but reached 44.034 versus 49.864/49.530 controls. The
+6.35% padded physical work cannot account for the remaining deficit: CU mode
+strands four local wave slots and WGP mode pays the known cross-CU handoff
+cost. The geometry is closed. Raw SHA-256 values are
+`50008ee36fba35af2863f64ff5ee1658d8e30534ccd3573529c4f70015e72cac`
+and `8de2600587dd01d44aa336dacd5bf6fa92df72e1a90cd0dabd731c24ac4b5ce7`.
+
 None of these results changes the qualified **49.143-TFLOPS** research leader
 or the requirement for five fresh exact process medians above 50 TFLOPS.

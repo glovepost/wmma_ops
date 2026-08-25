@@ -103,6 +103,9 @@ namespace rocm_wmma_gemm
 #ifndef WMMA_BP_FULL_TILE_STORE
 #define WMMA_BP_FULL_TILE_STORE 0
 #endif
+#ifndef WMMA_BP_PADDED_EDGES
+#define WMMA_BP_PADDED_EDGES 0
+#endif
 #ifndef WMMA_BP_STREAM_B_BARRIER
 #define WMMA_BP_STREAM_B_BARRIER 0
 #endif
@@ -159,8 +162,12 @@ struct block_prepacked_gemm
         constexpr int b_lds_buffers
             = WMMA_BP_HYBRID_B_PINGPONG ? 2 : lds_buffers;
         constexpr int warp_cols = block_n / (4 * wmma_tile);
-        static_assert((block_m == 128 || block_m == 256)
-                      && (block_n == 128 || block_n == 256));
+        static_assert(((block_m == 128 || block_m == 256)
+                       && (block_n == 128 || block_n == 256))
+                          || (WMMA_BP_PADDED_EDGES && WMMA_BP_PACK_N
+                              && block_m == 192 && block_n == 192
+                              && warp_tile_m == 3),
+                      "unsupported block-prepacked geometry");
         static_assert(WMMA_BP_K_SLICES == 1 || WMMA_BP_K_SLICES == 2);
         static_assert((WMMA_BP_FRAGMENT_SKEW_A == 0
                        && WMMA_BP_FRAGMENT_SKEW_B == 0)
@@ -219,8 +226,10 @@ struct block_prepacked_gemm
         const int warp_row = wave / warp_cols;
         const int warp_col = wave % warp_cols;
 
-        const int grid_m = M / block_m;
-        const int grid_n = N / block_n;
+        const int grid_m = WMMA_BP_PADDED_EDGES
+            ? (M + block_m - 1) / block_m : M / block_m;
+        const int grid_n = WMMA_BP_PADDED_EDGES
+            ? (N + block_n - 1) / block_n : N / block_n;
         int block_row = 0;
         int block_col = 0;
         tile_mapper<block_m,
@@ -788,6 +797,15 @@ struct block_prepacked_gemm
                                             && !WMMA_BP_LATE_B_REFILL)
                                         next_b1 = b_vectors[2 * tid + 1];
                                 }
+                            }
+                            else if constexpr(WMMA_BP_PADDED_EDGES
+                                              && block_m == 192
+                                              && block_n == 192)
+                            {
+                                if(wn == 0)
+                                    next_a0 = a_vectors[tid];
+                                else if(wn == 1)
+                                    next_b = b_vectors[tid];
                             }
                         }
 

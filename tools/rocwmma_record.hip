@@ -174,6 +174,9 @@ namespace {
 #ifndef RECORD_K
 #define RECORD_K 4096
 #endif
+#ifndef RECORD_PADDED_BLOCK_CONTRACT
+#define RECORD_PADDED_BLOCK_CONTRACT 0
+#endif
 #ifndef RECORD_SPLIT_MODULE_DISPATCH
 #define RECORD_SPLIT_MODULE_DISPATCH 0
 #endif
@@ -254,10 +257,15 @@ constexpr int kBlockK = RECORD_K_SLICES * rocm_wmma_gemm::wmma_tile;
 constexpr int kThreads = RECORD_PRODUCER_CONSUMER
     ? RECORD_PRODUCER_WAVES * rocm_wmma_gemm::warp_size
     : rocm_wmma_gemm::warp_size * RECORD_WARPS_M * RECORD_WARPS_N;
-static_assert(!RECORD_BLOCK_CONTRACT
+static_assert(RECORD_PADDED_BLOCK_CONTRACT
+                  || !RECORD_BLOCK_CONTRACT
                   || (kM % kBlockM == 0 && kN % kBlockN == 0
                       && kK % kBlockK == 0),
               "block-contract dimensions must be exact tile multiples");
+static_assert(!RECORD_PADDED_BLOCK_CONTRACT || RECORD_BLOCK_CONTRACT,
+              "padded edges apply only to a block-prepacked contract");
+static_assert(!RECORD_PADDED_BLOCK_CONTRACT || kK % kBlockK == 0,
+              "padded edges do not pad the reduction dimension");
 
 double median(std::vector<float> values) {
     std::sort(values.begin(), values.end());
@@ -318,11 +326,15 @@ int main(int argc, char** argv) {
         constexpr int block_m = kBlockM;
         constexpr int block_n = kBlockN;
         constexpr int block_k = kBlockK;
+        constexpr int m_blocks = (kM + block_m - 1) / block_m;
+        constexpr int n_blocks = (kN + block_n - 1) / block_n;
         original_a = host_a;
         original_b = host_b;
-        std::vector<half> packed_a(a_elements);
-        std::vector<half> packed_b(b_elements);
-        for (int bm = 0; bm < kM / block_m; ++bm) {
+        std::vector<half> packed_a(
+            static_cast<size_t>(m_blocks) * block_m * kK);
+        std::vector<half> packed_b(
+            static_cast<size_t>(n_blocks) * block_n * kK);
+        for (int bm = 0; bm < m_blocks; ++bm) {
             for (int bk = 0; bk < kK / block_k; ++bk) {
                 for (int m = 0; m < block_m; ++m) {
                     for (int k = 0; k < block_k; ++k) {
@@ -341,15 +353,20 @@ int main(int argc, char** argv) {
                                + m)
                                   * block_k
                               + k);
-                        const size_t logical =
-                            static_cast<size_t>(bk * block_k + k) * kM
-                            + bm * block_m + m;
-                        packed_a[packed] = host_a[logical];
+                        const int logical_m = bm * block_m + m;
+                        if (logical_m < kM) {
+                            const size_t logical =
+                                static_cast<size_t>(bk * block_k + k) * kM
+                                + logical_m;
+                            packed_a[packed] = host_a[logical];
+                        } else {
+                            packed_a[packed] = __float2half(0.0f);
+                        }
                     }
                 }
             }
         }
-        for (int bn = 0; bn < kN / block_n; ++bn) {
+        for (int bn = 0; bn < n_blocks; ++bn) {
             for (int bk = 0; bk < kK / block_k; ++bk) {
                 for (int n = 0; n < block_n; ++n) {
                     for (int k = 0; k < block_k; ++k) {
@@ -368,10 +385,15 @@ int main(int argc, char** argv) {
                                + n)
                                   * block_k
                               + k);
-                        const size_t logical =
-                            static_cast<size_t>(bk * block_k + k) * kN
-                            + bn * block_n + n;
-                        packed_b[packed] = host_b[logical];
+                        const int logical_n = bn * block_n + n;
+                        if (logical_n < kN) {
+                            const size_t logical =
+                                static_cast<size_t>(bk * block_k + k) * kN
+                                + logical_n;
+                            packed_b[packed] = host_b[logical];
+                        } else {
+                            packed_b[packed] = __float2half(0.0f);
+                        }
                     }
                 }
             }
@@ -407,17 +429,22 @@ int main(int argc, char** argv) {
     half* device_reference = nullptr;
     half* device_a = nullptr;
     half* device_b = nullptr;
+    const size_t a_storage_elements = host_a.size();
+    const size_t b_storage_elements = host_b.size();
     if (combined_ab) {
         HIP_CHECK(hipMalloc(&allocation_ab,
-                            (a_elements + b_elements + offset_a + offset_b)
+                            (a_storage_elements + b_storage_elements
+                             + offset_a + offset_b)
                                 * sizeof(*allocation_ab)));
         device_a = allocation_ab + offset_a;
-        device_b = device_a + a_elements + offset_b;
+        device_b = device_a + a_storage_elements + offset_b;
     } else {
         HIP_CHECK(hipMalloc(&allocation_a,
-                            (a_elements + offset_a) * sizeof(*allocation_a)));
+                            (a_storage_elements + offset_a)
+                                * sizeof(*allocation_a)));
         HIP_CHECK(hipMalloc(&allocation_b,
-                            (b_elements + offset_b) * sizeof(*allocation_b)));
+                            (b_storage_elements + offset_b)
+                                * sizeof(*allocation_b)));
         device_a = allocation_a + offset_a;
         device_b = allocation_b + offset_b;
     }
@@ -426,9 +453,11 @@ int main(int argc, char** argv) {
     half* const device_c = allocation_c + offset_c;
     HIP_CHECK(hipMalloc(&device_reference,
                         c_elements * sizeof(*device_reference)));
-    HIP_CHECK(hipMemcpy(device_a, host_a.data(), a_elements * sizeof(*device_a),
+    HIP_CHECK(hipMemcpy(device_a, host_a.data(),
+                        a_storage_elements * sizeof(*device_a),
                         hipMemcpyHostToDevice));
-    HIP_CHECK(hipMemcpy(device_b, host_b.data(), b_elements * sizeof(*device_b),
+    HIP_CHECK(hipMemcpy(device_b, host_b.data(),
+                        b_storage_elements * sizeof(*device_b),
                         hipMemcpyHostToDevice));
 
     // CPU and GPU share the Strix Halo package power envelope. Let the CPU-side
@@ -662,7 +691,9 @@ int main(int argc, char** argv) {
         kM, kN, kK, kBlockM, kBlockN, kBlockK, warmup, kTimingBlocks, iterations,
         offset_a, offset_b, offset_c, combined_ab ? "combined-ab" : "separate",
         RECORD_BLOCK_CONTRACT
-            ? (RECORD_BLOCK_SLICE_MAJOR
+            ? (RECORD_PADDED_BLOCK_CONTRACT
+                   ? "A/B-block-K16-prepacked-zero-padded-edges"
+                   : RECORD_BLOCK_SLICE_MAJOR
                    ? "A/B-block-K32-slice-prepacked"
                    : "A/B-block-K16-prepacked")
             : (RECORD_PREPACK_A ? (RECORD_PREPACK_B ? "A-row/B-col-prepacked"

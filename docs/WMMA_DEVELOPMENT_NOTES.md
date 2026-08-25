@@ -4605,3 +4605,36 @@ all guarded clause/NOP pairs. Raw outputs are
 and `/root/wmma-results/hot-loop-clause-composition-screen-20260824.txt`
 (SHA-256
 `87531467e660c58ed3c7c816e7ac3e1cbb3e0e9e249e67915c59bbcbaab63f46`).
+
+### 2026-08-24: padded 192x192 twelve-wave architecture
+
+The 256x128 leader uses two eight-wave blocks to fill 16 CU-local wave slots.
+A symmetric 192x192 design tested a different resource balance: four wave rows
+by three wave columns, with each wave computing a 48x64 tile (12 WMMAs per
+K16). Its 384 threads map exactly onto the 384 b128 vectors in each packed
+operand tile, avoiding partial producer waves. The source compiled to 115
+VGPR, 22 SGPR, and 18 KiB LDS, five fewer VGPR than the leader at the same LDS
+footprint.
+
+Because 192 does not divide 4096, `tools/rocwmma_record.hip` now has an opt-in
+padded block contract. It rounds M/N packing to 4224 outside timing, fills the
+added rows and columns with zero, launches the 22x22 grid, retains guarded
+logical 4096x4096 stores, and still reports only the logical 4096-cubed
+operation count. Thus the 6.35% physical-compute overhead is charged to the
+candidate rather than hidden in its denominator. The complete logical output
+reproduced normalized maximum error 0.018779343, RMS 0.035428338, and cosine
+0.999977929.
+
+CU placement admitted only one block/12 waves and reached 42.757 TFLOPS
+between selected-image controls at 49.399/49.437. The identical device
+instruction stream with only the XML/code-object workgroup-processor mode
+changed to WGP reported three blocks/36 waves, but reached 44.034 TFLOPS
+between controls at 49.864/49.530. Even crediting back all padded work gives
+only about 45.5/46.8 physical TFLOPS; it cannot close the logical gap. A
+12-wave CU block strands four local wave slots, while WGP placement repeats
+the previously measured cross-CU LDS/barrier penalty. The 192x192 geometry is
+closed. `build-block-192x192.sh` reproduces both placements. Raw outputs are
+`/root/wmma-results/block-192x192-smoke-20260824.txt` (SHA-256
+`50008ee36fba35af2863f64ff5ee1658d8e30534ccd3573529c4f70015e72cac`)
+and `/root/wmma-results/block-192x192-wgp-smoke-20260824.txt` (SHA-256
+`8de2600587dd01d44aa336dacd5bf6fa92df72e1a90cd0dabd731c24ac4b5ce7`).
