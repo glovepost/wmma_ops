@@ -4372,3 +4372,22 @@ CU-local shared-LDS schedule. More resident workgroups increase barrier/LDS
 contention enough to lose roughly 3.4 TFLOPS. Keep the exact 120-VGPR extent;
 do not use over-reservation as an occupancy hint. `build-vgpr-reservation.sh`
 reproduces the isolation.
+
+### 2026-08-24: per-wave instruction-prefetch modes
+
+RDNA 3.5 exposes `S_SET_INST_PREFETCH_DISTANCE` independently of the kernel
+descriptor's initial instruction-prefetch size. XML modes 1/2/3 retain 2/1/0
+cache lines behind the PC while fetching 1/2/3 ahead. This had not been covered
+by the earlier hot-loop alignment and phase screens.
+
+`tools/set_inst_prefetch_mode_asm.py` inserts the instruction immediately
+before `.LBB0_13`. Since the back edge targets the label, the mode change runs
+once on initial entry and persists for the loop. A same-size `s_nop 0` control
+separates the state change from the four-byte address shift. Every image stayed
+exact at 120 VGPR, 22 SGPR, 18 KiB LDS, and two blocks/16 waves.
+
+Modes 1/2/3 measured 49.149/49.281/49.446 TFLOPS and the NOP measured 49.076,
+between untouched controls at 49.480/49.298. Mode 3 merely tracks the control
+drift and does not beat the opening control; modes 1 and 2 are slower. Retain
+the wave-launch default and do not add a dynamic prefetch instruction.
+`build-inst-prefetch-mode.sh` reproduces the screen.

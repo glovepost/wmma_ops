@@ -1520,3 +1520,14 @@ LDS-sharing group is a synchronization/contention regression, not free latency
 hiding. Retain the honest 120-VGPR declaration. Raw output is
 `/root/wmma-results/vgpr-reservation-screen-20260824.txt` (SHA-256
 `6fc1f9b063b515c63aba7440306eaf474b5cdf96a7823f2f66ada6137abb53d0`).
+
+The XML-defined `S_SET_INST_PREFETCH_DISTANCE` was then tested separately from
+the earlier loop-alignment work. Modes 1/2/3 request 1/2/3 cache lines ahead
+while retaining 2/1/0 lines behind. The instruction was inserted once before
+the K-loop label, so the back edge does not re-execute it; a same-size `s_nop`
+isolated code placement. All images remained exact with unchanged resources.
+Modes 1, 2, and 3 reached 49.149, 49.281, and 49.446 TFLOPS, while the NOP
+reached 49.076 between controls at 49.480 and 49.298. No explicit mode beats
+the launch default repeatably, so the leader remains unchanged. Raw output is
+`/root/wmma-results/inst-prefetch-mode-screen-20260824.txt` (SHA-256
+`8e9e835354ec06ff3faf26acdd9c77ee713740991a372a160721192f5f25a18c`).
