@@ -1740,5 +1740,25 @@ embedded-padding pipeline is therefore closed without long qualification;
 `build-embedded-ab-pingpong.sh` reproduces it. Raw final-screen SHA-256 is
 `d1a9efe242d66568f6c690cb241a8defa2f7f42164acf12a355b9d31d9e076d0`.
 
+The RDNA 3.5 WMMA replication rule also enabled a genuinely different B-load
+experiment. Since lanes 16--31 must duplicate lanes 0--15, the lower row can
+load the low b128 half while the upper row loads the high half from one
+lane-dependent LDS address. Four `V_PERMLANEX16_B32` operations gather the
+opposite row's dwords, and four `V_SWAP_B32` operations under the upper-row
+EXEC mask normalize the fragment order. The 2026-08-06 XML explicitly defines
+the former as a VALU gather across two 16-lane rows and the latter as a
+two-VGPR swap.
+
+`tools/patch_halfwave_b_asm.py` applies this only to the 255-iteration steady
+state; the final K slice remains byte-for-byte unchanged. It halves B LDS
+traffic from eight to four b128 loads per K16 while retaining 120 VGPR, 18 KiB
+LDS, no scratch, and two blocks/16 waves; SGPR use rises from 22 to 24 for the
+identity lane selectors. The candidate reproduced the complete error tuple but
+reached only 46.212 TFLOPS versus 49.677/49.701 controls. Sixteen cross-row
+gathers and sixteen swaps per K16 cost more issue/latency than the four saved
+LDS instructions. The vectorized in-wave transpose is closed without long
+qualification. `build-halfwave-b.sh` reproduces the image; raw SHA-256 is
+`d9c5b64f4ed2a7fedc44994ac3dcb1b814b6cf7fe83514242eddcdf991e7be16`.
+
 None of these results changes the qualified **49.143-TFLOPS** research leader
 or the requirement for five fresh exact process medians above 50 TFLOPS.

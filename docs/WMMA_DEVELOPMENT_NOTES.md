@@ -4783,3 +4783,42 @@ image. Raw outputs and SHA-256 values are:
   `8929531fe5d9d49488ea8aa1c0724366cf392347bde1ae0962ae25fcf8fcc5db`
 - `/root/wmma-results/embedded-ab-pingpong-periodic-base-screen-20260824.txt`:
   `d1a9efe242d66568f6c690cb241a8defa2f7f42164acf12a355b9d31d9e076d0`
+
+### 2026-08-24: vectorized half-wave B reconstruction
+
+RDNA 3.5 WMMA replicates every A/B operand from lanes 0--15 into lanes 16--31.
+The leader nevertheless has all 32 lanes issue two b128 LDS reads for every B
+fragment. A new guarded assembly transform tested whether in-wave exchange can
+replace that replicated LDS bandwidth:
+
+1. Add 16 bytes to the LDS address for lanes 16--31.
+2. Issue one `DS_LOAD_B128`, giving the low half to the lower row and the high
+   half to the upper row.
+3. Use four `V_PERMLANEX16_B32` instructions with identity selectors to gather
+   the corresponding dwords from the opposite 16-lane row.
+4. Under an upper-row EXEC mask, swap the local and gathered banks with four
+   `V_SWAP_B32` instructions so both rows present an identical eight-VGPR WMMA
+   fragment.
+
+Both instruction choices are grounded in the 2026-08-06 machine-readable
+RDNA 3.5 XML: `V_PERMLANEX16_B32` is the VALU gather across two contiguous
+16-lane rows, while `V_SWAP_B32` exchanges two VGPR values. The transform is
+applied only to the 255 steady-state iterations. The final K slice remains
+untouched, providing a fixed tail and avoiding changes irrelevant to the hot
+loop.
+
+Static inspection confirms that each K16 body now has four B b128 reads rather
+than eight, followed by exactly 16 cross-row gathers and 16 swaps. Resources
+remain 120 VGPR, 18 KiB LDS, no scratch, and two blocks/16 waves; the two lane
+selector constants raise SGPR use from 22 to 24. Full-output validation passed
+with normalized maximum error 0.018779343, RMS error 0.035428338, and cosine
+similarity 0.999977929.
+
+The 10-warmup/5x5 bracket measured 46.212 TFLOPS between selected controls at
+49.677 and 49.701. Halving B LDS bytes is therefore not useful when each saved
+LDS instruction requires four serial fragment gathers and register-order
+normalization. This closes the proposed vectorized in-wave transpose without a
+long qualification. `tools/patch_halfwave_b_asm.py` and
+`build-halfwave-b.sh` reproduce the experiment. Raw output is
+`/root/wmma-results/halfwave-b-screen-20260824.txt` (SHA-256
+`d9c5b64f4ed2a7fedc44994ac3dcb1b814b6cf7fe83514242eddcdf991e7be16`).
