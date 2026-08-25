@@ -4573,3 +4573,35 @@ partition sweep. Raw outputs are
 `d0076d87a0ce411d102349f0c5db87b98c217d646ca18e5cc3ccd3ebe2669712`)
 and `/root/wmma-results/split-dispatch-qualify-20260824.txt` (SHA-256
 `254a503d946b985b626f2b3790929808d99584321f0171f8e211c34c5644df7c`).
+
+### 2026-08-24: explicit hot-loop instruction clauses
+
+AMD's 2026-08-06 RDNA 3.5 XML defines `S_CLAUSE` as an uninterrupted
+same-type sequence with length `SIMM16[5:0] + 1`; VALU and LDS operations are
+both supported clause types. `tools/clause_hot_loop_asm.py` therefore prefixes
+only naturally contiguous runs in the selected loop without moving an
+instruction. Its guards require the exact WMMA run lengths 2/4/4/3 and LDS
+run lengths 10/2/2/2. Every clause image and same-location `s_nop` control kept
+120 VGPR, 22 SGPR, 18 KiB LDS, two blocks/16 waves, and the full reference
+tuple.
+
+The first 30-warmup/5x10 screen produced two shallow signals. Clausing only
+the two four-WMMA runs reached 49.314 TFLOPS versus its 49.016 NOP; clausing
+only the initial ten LDS loads reached 49.480 versus 49.327. Extending clauses
+to every natural WMMA or LDS run reached 49.248 and 49.287 versus 49.171 and
+49.545 NOPs, while combining every run fell to 48.965. Opening/closing selected
+controls were 49.083/49.148 TFLOPS.
+
+A deeper 60-warmup/5x20 composition screen rejected both signals. The narrow
+WMMA4+LDS10 composition reached 49.222 TFLOPS versus its 49.167 NOP; the
+individual WMMA4 and LDS10 forms reached 49.190 and 49.284, all between
+selected-image controls at 49.332/48.995. The effects are not additive and no
+candidate beats the opening control, so explicit loop clauses are closed
+without long qualification. Hardware's ordinary inter-wave arbitration is
+preferable to uninterrupted issue here. `build-hot-loop-clauses.sh` reproduces
+all guarded clause/NOP pairs. Raw outputs are
+`/root/wmma-results/hot-loop-clauses-screen-20260824.txt` (SHA-256
+`5f4d5ef8027e8fdb6b416ab3a9d5c9e70fef8a886c1af90913630403f8b0e940`)
+and `/root/wmma-results/hot-loop-clause-composition-screen-20260824.txt`
+(SHA-256
+`87531467e660c58ed3c7c816e7ac3e1cbb3e0e9e249e67915c59bbcbaab63f46`).

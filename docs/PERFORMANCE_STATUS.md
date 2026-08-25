@@ -1626,5 +1626,17 @@ qualification SHA-256 values are
 `d0076d87a0ce411d102349f0c5db87b98c217d646ca18e5cc3ccd3ebe2669712`
 and `254a503d946b985b626f2b3790929808d99584321f0171f8e211c34c5644df7c`.
 
+The XML-supported VALU/LDS clause mechanism was also screened. A guarded
+assembly transform added `S_CLAUSE` only before the selected loop's natural
+WMMA runs (2/4/4/3 instructions) or LDS-load runs (10/2/2/2), with identical
+placement NOP controls. All forms retained 120 VGPR, 22 SGPR, 18 KiB LDS, two
+blocks/16 waves, and exact output. The short WMMA4 and LDS10 forms reached
+49.314/49.480 TFLOPS versus 49.016/49.327 NOPs, but the deeper screen rejected
+the signal: WMMA4+LDS10, WMMA4, and LDS10 reached 49.222, 49.190, and 49.284
+inside selected-image controls at 49.332/48.995. Clausing all natural runs was
+worse. Ordinary arbitration remains selected. Raw SHA-256 values are
+`5f4d5ef8027e8fdb6b416ab3a9d5c9e70fef8a886c1af90913630403f8b0e940`
+and `87531467e660c58ed3c7c816e7ac3e1cbb3e0e9e249e67915c59bbcbaab63f46`.
+
 None of these results changes the qualified **49.143-TFLOPS** research leader
 or the requirement for five fresh exact process medians above 50 TFLOPS.
