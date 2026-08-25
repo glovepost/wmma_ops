@@ -4528,3 +4528,48 @@ The aligned common fragment phase is beneficial for this schedule and remains
 selected. `build-fragment-phase-skew.sh` reproduces the sweep. Raw output is
 `/root/wmma-results/fragment-phase-skew-screen-20260824.txt` (SHA-256
 `b9c3c86cbaae3fccc4eb6634e9b5a59787650df95181d8839c6bd6f718dd65ff`).
+
+### 2026-08-24: split code-object dispatch scheduling
+
+The workgroup-local phase tests could not change how independent groups enter
+the hardware queues. A separate dispatch experiment therefore kept the
+selected device loop byte-for-byte unchanged and divided its 512 workgroups
+between two code objects and two HIP streams. `tools/offset_workgroup_id_asm.py`
+adds one `s_addk_i32 s2, offset` at the second image's entry; static diffing
+confirmed that this is the only instruction difference. Both images retain
+120 VGPR, 22 SGPR, 18 KiB LDS, and two blocks/16 waves per CU.
+
+`tools/rocwmma_record.hip` now has an opt-in module-dispatch path. It loads the
+two code objects with the HIP module API, launches disjoint workgroup ranges,
+and validates the complete 4096x4096 output against the same independent
+rocBLAS reference. Concurrent timing uses one device event as the common epoch
+for both streams and takes the slower of the two stop events, so reported time
+is full-output completion rather than a sum or a fastest-stream subset. A
+serial two-module control measured 46.379 TFLOPS versus 49.275 for one ordinary
+launch, quantifying the extra dispatch boundary without concurrency.
+
+All concurrent partition screens were exact:
+
+| Workgroups (stream 0 / stream 1) | TFLOPS |
+|---|---:|
+| 240 / 272 | 48.720 |
+| 256 / 256 | 48.633 |
+| 280 / 232 | 47.160 |
+| 320 / 192 | 47.490 |
+
+The opening/closing one-dispatch controls reached 49.258/48.995 TFLOPS. The
+best 240/272 partition then received six alternating-order processes at the
+standard 200 warmups and five 100-iteration timing blocks. It averaged 48.629
+TFLOPS (median 48.627, range 48.452--48.889) versus 48.913 for the selected
+image (median 48.883, range 48.736--49.211), a -0.284-TFLOPS delta with zero
+candidate wins. Every process reproduced normalized maximum error
+0.018779343, RMS error 0.035428338, and cosine similarity 0.999977929.
+
+Independent queue scheduling does not dephase the barrier-bound loop enough to
+repay its launch/scheduling cost. Keep the single 512-workgroup dispatch;
+`build-split-dispatch.sh` reproduces the control, serial split, and concurrent
+partition sweep. Raw outputs are
+`/root/wmma-results/split-dispatch-partitions-screen-20260824.txt` (SHA-256
+`d0076d87a0ce411d102349f0c5db87b98c217d646ca18e5cc3ccd3ebe2669712`)
+and `/root/wmma-results/split-dispatch-qualify-20260824.txt` (SHA-256
+`254a503d946b985b626f2b3790929808d99584321f0171f8e211c34c5644df7c`).

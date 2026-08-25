@@ -1607,5 +1607,24 @@ The original 768-byte, bank-period-aligned fragment spacing remains selected.
 Raw SHA-256 is
 `b9c3c86cbaae3fccc4eb6634e9b5a59787650df95181d8839c6bd6f718dd65ff`.
 
+An independent-dispatch architecture was tested after the workgroup-local
+phase controls. The selected 512-workgroup image was split into two standalone
+HIP code objects; the second differs only by one entry `s_addk_i32` that maps
+its local IDs onto the remaining output tiles. Both retain 120 VGPR, 22 SGPR,
+18 KiB LDS, and two blocks/16 waves. The opt-in harness launches the images on
+separate streams, times both from a common device event, uses the slower stop
+as full-output completion, and validates all 16,777,216 results.
+
+The exact 240/272, 256/256, 280/232, and 320/192 splits reached 48.720, 48.633,
+47.160, and 47.490 TFLOPS, respectively, between one-dispatch controls at
+49.258/48.995. Six alternating long pairs then compared the best 240/272 form:
+it averaged 48.629 TFLOPS (48.452--48.889) versus 48.913
+(48.736--49.211) for the selected image and lost every pair. A serial 256/256
+split reached only 46.379 TFLOPS. Separate queue scheduling cannot repay the
+extra dispatch boundary, so the single launch remains selected. Raw screen and
+qualification SHA-256 values are
+`d0076d87a0ce411d102349f0c5db87b98c217d646ca18e5cc3ccd3ebe2669712`
+and `254a503d946b985b626f2b3790929808d99584321f0171f8e211c34c5644df7c`.
+
 None of these results changes the qualified **49.143-TFLOPS** research leader
 or the requirement for five fresh exact process medians above 50 TFLOPS.

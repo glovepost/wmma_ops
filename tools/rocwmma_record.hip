@@ -141,6 +141,9 @@ namespace {
 #ifndef RECORD_GRID_BLOCKS
 #define RECORD_GRID_BLOCKS 0
 #endif
+#ifndef RECORD_GRID_BLOCKS_B
+#define RECORD_GRID_BLOCKS_B RECORD_GRID_BLOCKS
+#endif
 #ifndef RECORD_INTERLEAVED_PINGPONG
 #define RECORD_INTERLEAVED_PINGPONG 0
 #endif
@@ -170,6 +173,18 @@ namespace {
 #endif
 #ifndef RECORD_K
 #define RECORD_K 4096
+#endif
+#ifndef RECORD_SPLIT_MODULE_DISPATCH
+#define RECORD_SPLIT_MODULE_DISPATCH 0
+#endif
+#ifndef RECORD_SPLIT_CONCURRENT
+#define RECORD_SPLIT_CONCURRENT 0
+#endif
+#ifndef RECORD_MODULE0_PATH
+#define RECORD_MODULE0_PATH ""
+#endif
+#ifndef RECORD_MODULE1_PATH
+#define RECORD_MODULE1_PATH ""
 #endif
 #define RECORD_BLOCK_CONTRACT \
     (RECORD_BLOCK_PREPACKED | RECORD_BLOCK_K2_RING | RECORD_WAVEPRIVATE_A \
@@ -423,23 +438,89 @@ int main(int argc, char** argv) {
 
     hipStream_t stream = nullptr;
     HIP_CHECK(hipStreamCreate(&stream));
+#if RECORD_SPLIT_MODULE_DISPATCH && RECORD_SPLIT_CONCURRENT
+    hipStream_t stream_b = nullptr;
+    HIP_CHECK(hipStreamCreate(&stream_b));
+#endif
     const int grid_m = (kM + kBlockM - 1) / kBlockM;
     const int grid_n = (kN + kBlockN - 1) / kBlockN;
     const dim3 grid(RECORD_GRID_BLOCKS > 0
                         ? RECORD_GRID_BLOCKS
                         : grid_m * grid_n);
+#if RECORD_SPLIT_MODULE_DISPATCH
+    const dim3 grid_b(RECORD_GRID_BLOCKS_B);
+#if RECORD_SPLIT_CONCURRENT
+    constexpr const char* dispatch_name = "split-two-stream";
+#else
+    constexpr const char* dispatch_name = "split-serial";
+#endif
+#else
+    constexpr const char* dispatch_name = "single";
+#endif
     const dim3 block(kThreads);
     int active_blocks_per_cu = 0;
+#if RECORD_SPLIT_MODULE_DISPATCH
+    static_assert(RECORD_GRID_BLOCKS > 0,
+                  "split module dispatch needs an explicit half-grid size");
+    static_assert(RECORD_GRID_BLOCKS + RECORD_GRID_BLOCKS_B
+                      == (kM / kBlockM) * (kN / kBlockN),
+                  "split module grids must cover the complete output once");
+    hipModule_t module0 = nullptr;
+    hipModule_t module1 = nullptr;
+    hipFunction_t function0 = nullptr;
+    hipFunction_t function1 = nullptr;
+    constexpr const char* kernel_symbol =
+        "_ZN14rocm_wmma_gemm20block_prepacked_gemm3runEP6__halfPKS1_S4_iii";
+    HIP_CHECK(hipModuleLoad(&module0, RECORD_MODULE0_PATH));
+    HIP_CHECK(hipModuleLoad(&module1, RECORD_MODULE1_PATH));
+    HIP_CHECK(hipModuleGetFunction(&function0, module0, kernel_symbol));
+    HIP_CHECK(hipModuleGetFunction(&function1, module1, kernel_symbol));
+    int active_blocks_module1 = 0;
+    HIP_CHECK(hipModuleOccupancyMaxActiveBlocksPerMultiprocessor(
+        &active_blocks_per_cu, function0, kThreads, RECORD_DYNAMIC_LDS_BYTES));
+    HIP_CHECK(hipModuleOccupancyMaxActiveBlocksPerMultiprocessor(
+        &active_blocks_module1, function1, kThreads,
+        RECORD_DYNAMIC_LDS_BYTES));
+    if (active_blocks_per_cu != active_blocks_module1) {
+        std::fprintf(stderr, "split module occupancy mismatch: %d != %d\n",
+                     active_blocks_per_cu, active_blocks_module1);
+        return 2;
+    }
+#else
     HIP_CHECK(hipOccupancyMaxActiveBlocksPerMultiprocessor(
         &active_blocks_per_cu,
         RecordKernel::run,
         kThreads,
         RECORD_DYNAMIC_LDS_BYTES));
+#endif
     std::printf("occupancy active_blocks_per_cu=%d active_waves_per_cu=%d\n",
                 active_blocks_per_cu,
                 active_blocks_per_cu * kThreads / rocm_wmma_gemm::warp_size);
 
     auto launch = [&]() {
+#if RECORD_SPLIT_MODULE_DISPATCH
+        half* output = device_c;
+        const half* input_a = device_a;
+        const half* input_b = device_b;
+        int m = kM;
+        int n = kN;
+        int k = kK;
+        void* kernel_params[] = {
+            &output, &input_a, &input_b, &m, &n, &k,
+        };
+        HIP_CHECK(hipModuleLaunchKernel(
+            function0, grid.x, 1, 1, block.x, 1, 1,
+            RECORD_DYNAMIC_LDS_BYTES, stream, kernel_params, nullptr));
+        HIP_CHECK(hipModuleLaunchKernel(
+            function1, grid_b.x, 1, 1, block.x, 1, 1,
+            RECORD_DYNAMIC_LDS_BYTES,
+#if RECORD_SPLIT_CONCURRENT
+            stream_b,
+#else
+            stream,
+#endif
+            kernel_params, nullptr));
+#else
         hipLaunchKernelGGL(RecordKernel::run,
                            grid,
                            block,
@@ -448,28 +529,52 @@ int main(int argc, char** argv) {
                            device_c, device_a, device_b,
                            kM, kN, kK);
         HIP_CHECK(hipPeekAtLastError());
+#endif
     };
 
     for (int index = 0; index < warmup; ++index) {
         launch();
     }
     HIP_CHECK(hipStreamSynchronize(stream));
+#if RECORD_SPLIT_MODULE_DISPATCH && RECORD_SPLIT_CONCURRENT
+    HIP_CHECK(hipStreamSynchronize(stream_b));
+#endif
 
     hipEvent_t start = nullptr;
     hipEvent_t stop = nullptr;
     HIP_CHECK(hipEventCreate(&start));
     HIP_CHECK(hipEventCreate(&stop));
+#if RECORD_SPLIT_MODULE_DISPATCH && RECORD_SPLIT_CONCURRENT
+    hipEvent_t stop_b = nullptr;
+    HIP_CHECK(hipEventCreate(&stop_b));
+#endif
     std::vector<float> times_ms;
     times_ms.reserve(kTimingBlocks);
     for (int timing_block = 0; timing_block < kTimingBlocks; ++timing_block) {
         HIP_CHECK(hipEventRecord(start, stream));
+#if RECORD_SPLIT_MODULE_DISPATCH && RECORD_SPLIT_CONCURRENT
+        // Both queues measure from the same device-side epoch. The slower stop
+        // is the completion time for the full output, not the sum of streams.
+        HIP_CHECK(hipStreamWaitEvent(stream_b, start, 0));
+#endif
         for (int index = 0; index < iterations; ++index) {
             launch();
         }
         HIP_CHECK(hipEventRecord(stop, stream));
+#if RECORD_SPLIT_MODULE_DISPATCH && RECORD_SPLIT_CONCURRENT
+        HIP_CHECK(hipEventRecord(stop_b, stream_b));
+#endif
         HIP_CHECK(hipEventSynchronize(stop));
+#if RECORD_SPLIT_MODULE_DISPATCH && RECORD_SPLIT_CONCURRENT
+        HIP_CHECK(hipEventSynchronize(stop_b));
+#endif
         float elapsed_ms = 0.0f;
         HIP_CHECK(hipEventElapsedTime(&elapsed_ms, start, stop));
+#if RECORD_SPLIT_MODULE_DISPATCH && RECORD_SPLIT_CONCURRENT
+        float elapsed_b_ms = 0.0f;
+        HIP_CHECK(hipEventElapsedTime(&elapsed_b_ms, start, stop_b));
+        elapsed_ms = std::max(elapsed_ms, elapsed_b_ms);
+#endif
         times_ms.push_back(elapsed_ms / iterations);
     }
 
@@ -551,7 +656,7 @@ int main(int argc, char** argv) {
     std::printf(
         "config=%d,%d,%d,%d,%d,%d,%d,%d shape=%dx%dx%d block=%dx%d k=%d cu_mode=1 "
         "warmup=%d timing_blocks=%d iterations_per_block=%d offsets=%zu,%zu,%zu "
-        "allocation=%s input_contract=%s pipeline=%s\n",
+        "allocation=%s input_contract=%s pipeline=%s dispatch=%s grids=%u,%u\n",
         RECORD_WARPS_M, RECORD_WARPS_N, RECORD_WARP_TILE_M, RECORD_WARP_TILE_N,
         RECORD_K_SLICES, RECORD_SINGLE_BUFFER, RECORD_SWIZZLE, RECORD_BITS,
         kM, kN, kK, kBlockM, kBlockN, kBlockK, warmup, kTimingBlocks, iterations,
@@ -567,7 +672,14 @@ int main(int argc, char** argv) {
         RECORD_BLOCK_CONTRACT
             ? "blocked-native-fragment"
             : (RECORD_PRODUCER_CONSUMER ? "inter-wave-producer-consumer"
-                                        : "cooperative"));
+                                        : "cooperative"),
+        dispatch_name, grid.x,
+#if RECORD_SPLIT_MODULE_DISPATCH
+        grid_b.x
+#else
+        0u
+#endif
+    );
     std::printf(
         "median_ms=%.6f tflops=%.6f min_ms=%.6f max_ms=%.6f\n",
         median_ms, tflops,
@@ -583,8 +695,18 @@ int main(int argc, char** argv) {
                 kPromotionTargetTflops, promoted ? "yes" : "no");
 
     ROCBLAS_CHECK(rocblas_destroy_handle(handle));
+#if RECORD_SPLIT_MODULE_DISPATCH && RECORD_SPLIT_CONCURRENT
+    HIP_CHECK(hipEventDestroy(stop_b));
+#endif
     HIP_CHECK(hipEventDestroy(stop));
     HIP_CHECK(hipEventDestroy(start));
+#if RECORD_SPLIT_MODULE_DISPATCH
+    HIP_CHECK(hipModuleUnload(module1));
+    HIP_CHECK(hipModuleUnload(module0));
+#endif
+#if RECORD_SPLIT_MODULE_DISPATCH && RECORD_SPLIT_CONCURRENT
+    HIP_CHECK(hipStreamDestroy(stream_b));
+#endif
     HIP_CHECK(hipStreamDestroy(stream));
     HIP_CHECK(hipFree(device_reference));
     HIP_CHECK(hipFree(allocation_c));
