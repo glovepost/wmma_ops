@@ -20,16 +20,6 @@ using namespace rocwmma;
 
 typedef _Float16 half8_opt __attribute__((ext_vector_type(8)));
 
-// Shuffle a _Float16 across an 8-lane subgroup (avoids relying on __shfl supporting __half directly)
-__device__ __forceinline__ _Float16 shfl_half_8(_Float16 v, int srcLane)
-{
-    uint16_t u16 = __builtin_bit_cast(uint16_t, v);
-    uint32_t u32 = (uint32_t)u16;
-    uint32_t r32 = __shfl(u32, srcLane, 8);
-    uint16_t r16 = (uint16_t)r32;
-    return __builtin_bit_cast(_Float16, r16);
-}
-
 struct OptConfig {
     static constexpr int WMMA_M = 16, WMMA_N = 16, WMMA_K = 16, WARP_SIZE = 32;
     static constexpr int WARPS_M = 4, WARPS_N = 2, NWARPS = 8;
@@ -39,6 +29,17 @@ struct OptConfig {
     static constexpr int LDS_STRIDE_B = BLOCK_K + 8;  // 24 - stride in K dimension for B (column-major)
     static constexpr int NUM_THREADS = 256, HALF_BLOCK = 128;
 };
+
+#ifndef WMMA_OPT_MIN_BLOCKS_PER_CU
+#define WMMA_OPT_MIN_BLOCKS_PER_CU 2
+#endif
+
+#if WMMA_OPT_MIN_BLOCKS_PER_CU > 0
+#define WMMA_OPT_LAUNCH_BOUNDS \
+    __launch_bounds__(OptConfig::NUM_THREADS, WMMA_OPT_MIN_BLOCKS_PER_CU)
+#else
+#define WMMA_OPT_LAUNCH_BOUNDS __launch_bounds__(OptConfig::NUM_THREADS)
+#endif
 
 // Load A tile: 128 threads load 128 rows × 16 cols
 // A is row-major [M, K], stored in LDS as A_lds[M][K] (row-major)
@@ -69,105 +70,46 @@ __device__ __forceinline__ void load_A_tile(
     }
 }
 
-// Load B tile with vectorized GMEM access + register-staged shuffle transpose to LDS
-// B is row-major [K, N] in GMEM
-// Store as COLUMN-MAJOR in LDS: B_lds[N][K] so load_matrix_sync_lds_b_transposed works
-//
-// Strategy: 8-lane subgroups do 8×8 transpose in registers via shuffles
-// - Each 8-lane subgroup loads 8 rows of B (k varies) as half8 along N
-// - In registers, each lane picks one N element and shuffles across subgroup
-// - One vector store writes B_lds[n][k..k+7] (contiguous along K)
+// Load B with vectorized global reads and scalar scatter into transposed LDS.
+// Each 8-lane subgroup covers one half8 vector along N for eight K rows. Two
+// passes cover BLOCK_K=16. This mirrors the proven 64x16 helper. The former
+// shuffle path selected row[lane8] independently in every source lane, copying
+// diagonal elements instead of performing an 8x8 transpose.
 template<typename cfg>
 __device__ __forceinline__ void load_B_tile(
-    __half B_lds[][cfg::LDS_STRIDE_B],  // [BLOCK_N][LDS_STRIDE_B] = [128][24]
+    __half B_lds[][cfg::LDS_STRIDE_B],
     const __half* __restrict__ B,
     int block_n, int k_offset, int cid, int N, int K
 ) {
-    // For BLOCK_N=128, BLOCK_K=16:
-    // NVECS = 128/8 = 16 (number of 8-element vectors along N)
-    // KVECS = 16/8 = 2 (number of 8-element vectors along K)
-    // THREADS_NEEDED = 16 * 2 * 8 = 256 threads
-    // But we only have 128 threads for B loading, so each thread does 2 subgroup-work-items
-    
-    constexpr int NVECS = cfg::BLOCK_N / 8;  // 16
-    constexpr int KVECS = cfg::BLOCK_K / 8;  // 2
-    
-    const int tid = cid;  // 0..127
-    const int lane8 = tid & 7;       // 0..7 within 8-lane subgroup
-    const int groupId = tid >> 3;    // 0..15 (which 8-lane subgroup)
-    
-    // First pass: handle first half of N vectors (groupId maps to n_vec directly)
-    // groupId 0..15 covers n_vec 0..15 for k_group 0
-    {
-        const int k_group = 0;
-        const int n_vec = groupId;  // 0..15
-        
-        const int n_base = n_vec * 8;      // 0,8,16,...,120
-        const int k_base = k_group * 8;    // 0
+    const int lane8 = cid & 7;
+    const int n_base = (cid >> 3) * 8;
+
+    #pragma unroll
+    for (int k_group = 0; k_group < 2; ++k_group) {
+        const int k_base = k_group * 8;
         const int k = k_offset + k_base + lane8;
         const int n_gmem = block_n + n_base;
-        
-        // Load a row-vector: B[k][n_base..n_base+7]
         half8_opt row = {0,0,0,0,0,0,0,0};
-        
-        if (k < K && (n_gmem + 7) < N) {
-            const __half* src = B + k * N + n_gmem;
-            row = *reinterpret_cast<const half8_opt*>(src);
+        if (k < K && n_gmem + 7 < N) {
+            row = *reinterpret_cast<const half8_opt*>(B + k * N + n_gmem);
         }
-        
-        // Register-staged transpose via shuffles
-        // This lane outputs vector for n = n_base + lane8, containing k = k_offset+k_base..+7
-        half8_opt col;
-        col[0] = shfl_half_8(row[lane8], 0);
-        col[1] = shfl_half_8(row[lane8], 1);
-        col[2] = shfl_half_8(row[lane8], 2);
-        col[3] = shfl_half_8(row[lane8], 3);
-        col[4] = shfl_half_8(row[lane8], 4);
-        col[5] = shfl_half_8(row[lane8], 5);
-        col[6] = shfl_half_8(row[lane8], 6);
-        col[7] = shfl_half_8(row[lane8], 7);
-        
-        // Store to LDS as B_lds[n][k..k+7] (contiguous along K)
-        const int n_lds = n_base + lane8;  // 0..BLOCK_N-1
-        __half* dst = &B_lds[n_lds][k_base];
-        *reinterpret_cast<half8_opt*>(dst) = col;
-    }
-    
-    // Second pass: handle k_group 1 (k_base = 8)
-    {
-        const int k_group = 1;
-        const int n_vec = groupId;  // 0..15
-        
-        const int n_base = n_vec * 8;
-        const int k_base = k_group * 8;    // 8
-        const int k = k_offset + k_base + lane8;
-        const int n_gmem = block_n + n_base;
-        
-        half8_opt row = {0,0,0,0,0,0,0,0};
-        
-        if (k < K && (n_gmem + 7) < N) {
-            const __half* src = B + k * N + n_gmem;
-            row = *reinterpret_cast<const half8_opt*>(src);
+
+        union {
+            half8_opt vec;
+            _Float16 elems[8];
+        } unpacked;
+        unpacked.vec = row;
+
+        #pragma unroll
+        for (int n_local = 0; n_local < 8; ++n_local) {
+            B_lds[n_base + n_local][k_base + lane8] =
+                *reinterpret_cast<__half*>(&unpacked.elems[n_local]);
         }
-        
-        half8_opt col;
-        col[0] = shfl_half_8(row[lane8], 0);
-        col[1] = shfl_half_8(row[lane8], 1);
-        col[2] = shfl_half_8(row[lane8], 2);
-        col[3] = shfl_half_8(row[lane8], 3);
-        col[4] = shfl_half_8(row[lane8], 4);
-        col[5] = shfl_half_8(row[lane8], 5);
-        col[6] = shfl_half_8(row[lane8], 6);
-        col[7] = shfl_half_8(row[lane8], 7);
-        
-        const int n_lds = n_base + lane8;
-        __half* dst = &B_lds[n_lds][k_base];
-        *reinterpret_cast<half8_opt*>(dst) = col;
     }
 }
 
 template<int CFG_NWARPS = OptConfig::NWARPS>
-__launch_bounds__(OptConfig::NUM_THREADS, 2)
+WMMA_OPT_LAUNCH_BOUNDS
 __global__ void wmma_gemm_kernel_opt(
     const __half* __restrict__ A,
     const __half* __restrict__ B,
@@ -294,5 +236,7 @@ __global__ void wmma_gemm_kernel_opt(
 
 template __global__ void wmma_gemm_kernel_opt<OptConfig::NWARPS>(
     const __half*, const __half*, float*, int, int, int);
+
+#undef WMMA_OPT_LAUNCH_BOUNDS
 
 #endif // WMMA_KERNEL_LARGETILE_HPP

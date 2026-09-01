@@ -1,0 +1,27 @@
+FROM rocm/dev-ubuntu-24.04:7.14.0-full
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTORCH_ROCM_ARCH=gfx1151
+ENV ROCM_PATH=/opt/rocm
+ENV HIP_PATH=/opt/rocm
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ninja-build \
+        python3-dev \
+        python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m venv /opt/venv
+ENV PATH=/opt/venv/bin:/opt/rocm/bin:/opt/rocm/llvm/bin:$PATH
+
+# AMD's gfx1151 index currently publishes PyTorch against ROCm 7.13. The HIP
+# compiler and system runtime come from the ROCm 7.14 base image. Both versions
+# are captured by benchmark_record.py; do not describe this as a fully matched
+# stack when publishing results.
+RUN python -m pip install --upgrade pip setuptools wheel \
+    && python -m pip install \
+        --index-url https://repo.amd.com/rocm/whl/gfx1151/ \
+        torch==2.11.0+rocm7.13.0
+
+WORKDIR /workspace/wmma_ops

@@ -1,4 +1,5 @@
 #include <torch/extension.h>
+#include <c10/hip/HIPException.h>
 #include <c10/hip/HIPStream.h>
 #include "rocwmma_patch/rocwmma_gfx1151.hpp"
 #include "wmma_xor_swizzle.hpp"
@@ -8,8 +9,24 @@
 #include "wmma_kernel_variants.hpp"
 #include "wmma_kernels_pingpong.hpp"
 #include "wmma_kernel_largetile.hpp"
+#include "wmma_kernel_opt16.hpp"
+#include "wmma_kernel_direct_lds.hpp"
+#include "wmma_kernel_opt_interleaved.hpp"
+#include "wmma_kernel_opt_k32.hpp"
+#include "wmma_kernel_opt_128x64_k32.hpp"
+#include "wmma_kernel_opt_raw_k32.hpp"
+#include "transpose_fp16_tiled.hpp"
+#include "wmma_kernel_single_wave.hpp"
+#include "wmma_kernel_4wave_k32.hpp"
+#include "wmma_kernel_opt_k32_balanced.hpp"
 
 using namespace rocwmma;
+
+// PyTorch 2.11's HIP headers expose the hipified CUDA spelling only. Preserve
+// compatibility with older PyTorch releases that provided the HIP alias.
+#ifndef C10_HIP_KERNEL_LAUNCH_CHECK
+#define C10_HIP_KERNEL_LAUNCH_CHECK C10_CUDA_KERNEL_LAUNCH_CHECK
+#endif
 
 #if defined(__HIP_DEVICE_COMPILE__) && defined(__AMDGCN_WAVEFRONT_SIZE) && __AMDGCN_WAVEFRONT_SIZE != 32
 #error "This kernel requires wave32 mode. Compile with -mwavefrontsize64=off"
@@ -1043,11 +1060,9 @@ template __global__ void wmma_gemm_kernel_zerocopy<8, 4, 2>(const __half*, const
 
 // =============================================================================
 // GFX1151 NATIVE KERNEL
-// Architecture-specific optimizations (NOT PORTABLE):
-// 1. Async global-to-LDS loads via __builtin_amdgcn_global_load_lds
-// 2. Explicit waitcnt for fine-grained scheduling
-// 3. Hardware prefetch for next K iteration
-// 4. Direct WMMA instruction scheduling
+// Architecture-specific experiment (NOT PORTABLE): explicit fences and
+// scheduling hints around the same synchronous global-load -> LDS staging used
+// elsewhere. This implementation does not issue an asynchronous copy intrinsic.
 // =============================================================================
 
 __launch_bounds__(256, 2)
@@ -1238,7 +1253,7 @@ torch::Tensor wmma_matmul_adaptive(torch::Tensor A, torch::Tensor B) {
             break;
         }
         case TileConfig::LARGE_256x64: {
-            // 256x64 tile: 16 warps, maximum A reuse for tall matrices
+            // 256x64 tile: 16 warps, maximum B reuse across output rows
             dim3 grid((N + 63) / 64, (M + 255) / 256);
             wmma_gemm_kernel_gfx1151<16, 8, 2><<<grid, 512, 0, stream>>>(A_ptr, B_ptr, C_ptr, M, N, K);
             break;
@@ -1320,11 +1335,12 @@ torch::Tensor wmma_matmul_pingpong(torch::Tensor A, torch::Tensor B) {
 }
 
 // =============================================================================
-// OPTIMIZED KERNEL (adelj-style)
-// - 256×128 tiles with 4×4 warp tiling (16 WMMA tiles per warp)
+// EXPERIMENTAL LARGE-TILE KERNEL (adelj-style)
+// - 128x128 work-group tile
+// - 4x2 wave layout, with 2x4 WMMA output tiles per wave
 // - Cooperative loading (half threads load A, half load B)
-// - Vectorized LDS epilogue for coalesced writes
-// - Requires: M%256==0, N%128==0, K%16==0 for best performance
+// - Direct scalar global-store epilogue
+// - Requires K%16==0; aligned M/N avoid edge predicates
 // =============================================================================
 torch::Tensor wmma_matmul_opt(torch::Tensor A, torch::Tensor B) {
     TORCH_CHECK(A.is_cuda() && B.is_cuda(), "Inputs must be GPU tensors");
@@ -1366,6 +1382,549 @@ torch::Tensor wmma_matmul_opt(torch::Tensor A, torch::Tensor B) {
     
     wmma_gemm_kernel_opt<><<<grid, block, 0, stream>>>(A_ptr, B_ptr, C_ptr, M, N, K);
     
+    C10_HIP_KERNEL_LAUNCH_CHECK();
+    return C;
+}
+
+// 256x128 work-group tile, 4x4 WMMA tiles per wave, FP32 accumulation/output.
+torch::Tensor wmma_matmul_opt16(torch::Tensor A, torch::Tensor B) {
+    TORCH_CHECK(A.is_cuda() && B.is_cuda(), "Inputs must be GPU tensors");
+    TORCH_CHECK(A.device() == B.device(), "Inputs must be on same device");
+    TORCH_CHECK(A.dtype() == torch::kFloat16 && B.dtype() == torch::kFloat16,
+                "Inputs must be float16");
+    TORCH_CHECK(A.dim() == 2 && B.dim() == 2, "Inputs must be 2D");
+    TORCH_CHECK(A.size(1) == B.size(0), "Inner dimensions must match");
+
+    const int M = A.size(0);
+    const int K = A.size(1);
+    const int N = B.size(1);
+    TORCH_CHECK((K % Opt16Config::BLOCK_K) == 0,
+                "K must be a multiple of 16 for WMMA (got K=", K, ")");
+
+    A = A.contiguous();
+    B = B.contiguous();
+    auto C = torch::empty({M, N}, torch::dtype(torch::kFloat32).device(A.device()));
+
+    const __half* A_ptr =
+        reinterpret_cast<const __half*>(A.data_ptr<at::Half>());
+    const __half* B_ptr =
+        reinterpret_cast<const __half*>(B.data_ptr<at::Half>());
+    float* C_ptr = C.data_ptr<float>();
+    hipStream_t stream = c10::hip::getCurrentHIPStream(A.device().index()).stream();
+
+    dim3 grid((N + Opt16Config::BLOCK_N - 1) / Opt16Config::BLOCK_N,
+              (M + Opt16Config::BLOCK_M - 1) / Opt16Config::BLOCK_M);
+    dim3 block(Opt16Config::NUM_THREADS);
+    wmma_gemm_kernel_opt16<<<grid, block, 0, stream>>>(
+        A_ptr, B_ptr, C_ptr, M, N, K);
+
+    C10_HIP_KERNEL_LAUNCH_CHECK();
+    return C;
+}
+
+torch::Tensor wmma_matmul_direct_lds(torch::Tensor A, torch::Tensor B) {
+    TORCH_CHECK(A.is_cuda() && B.is_cuda(), "Inputs must be GPU tensors");
+    TORCH_CHECK(A.device() == B.device(), "Inputs must be on same device");
+    TORCH_CHECK(A.dtype() == torch::kFloat16 && B.dtype() == torch::kFloat16,
+                "Inputs must be float16");
+    TORCH_CHECK(A.dim() == 2 && B.dim() == 2, "Inputs must be 2D");
+    TORCH_CHECK(A.size(1) == B.size(0), "Inner dimensions must match");
+
+    const int M = A.size(0);
+    const int K = A.size(1);
+    const int N = B.size(1);
+    TORCH_CHECK((M % DirectLdsConfig::BLOCK_M) == 0,
+                "M must be a multiple of 128 (got M=", M, ")");
+    TORCH_CHECK((N % DirectLdsConfig::BLOCK_N) == 0,
+                "N must be a multiple of 128 (got N=", N, ")");
+    TORCH_CHECK((K % DirectLdsConfig::BLOCK_K) == 0,
+                "K must be a multiple of 16 (got K=", K, ")");
+
+    A = A.contiguous();
+    B = B.contiguous();
+    auto C = torch::empty({M, N}, torch::dtype(torch::kFloat32).device(A.device()));
+    const __half* A_ptr =
+        reinterpret_cast<const __half*>(A.data_ptr<at::Half>());
+    const __half* B_ptr =
+        reinterpret_cast<const __half*>(B.data_ptr<at::Half>());
+    float* C_ptr = C.data_ptr<float>();
+    hipStream_t stream = c10::hip::getCurrentHIPStream(A.device().index()).stream();
+
+    dim3 grid(N / DirectLdsConfig::BLOCK_N, M / DirectLdsConfig::BLOCK_M);
+    dim3 block(DirectLdsConfig::NUM_THREADS);
+    wmma_gemm_kernel_direct_lds<<<grid, block, 0, stream>>>(
+        A_ptr, B_ptr, C_ptr, N, K);
+    C10_HIP_KERNEL_LAUNCH_CHECK();
+    return C;
+}
+
+torch::Tensor wmma_matmul_opt_interleaved(torch::Tensor A, torch::Tensor B) {
+    TORCH_CHECK(A.is_cuda() && B.is_cuda(), "Inputs must be GPU tensors");
+    TORCH_CHECK(A.device() == B.device(), "Inputs must be on same device");
+    TORCH_CHECK(A.dtype() == torch::kFloat16 && B.dtype() == torch::kFloat16,
+                "Inputs must be float16");
+    TORCH_CHECK(A.dim() == 2 && B.dim() == 2, "Inputs must be 2D");
+    TORCH_CHECK(A.size(1) == B.size(0), "Inner dimensions must match");
+
+    const int M = A.size(0);
+    const int K = A.size(1);
+    const int N = B.size(1);
+    TORCH_CHECK((M % OptConfig::BLOCK_M) == 0,
+                "M must be a multiple of 128 (got M=", M, ")");
+    TORCH_CHECK((N % OptConfig::BLOCK_N) == 0,
+                "N must be a multiple of 128 (got N=", N, ")");
+    TORCH_CHECK((K % OptConfig::BLOCK_K) == 0,
+                "K must be a multiple of 16 (got K=", K, ")");
+
+    A = A.contiguous();
+    B = B.contiguous();
+    auto C = torch::empty({M, N}, torch::dtype(torch::kFloat32).device(A.device()));
+    const __half* A_ptr =
+        reinterpret_cast<const __half*>(A.data_ptr<at::Half>());
+    const __half* B_ptr =
+        reinterpret_cast<const __half*>(B.data_ptr<at::Half>());
+    float* C_ptr = C.data_ptr<float>();
+    hipStream_t stream = c10::hip::getCurrentHIPStream(A.device().index()).stream();
+
+    dim3 grid(N / OptConfig::BLOCK_N, M / OptConfig::BLOCK_M);
+    dim3 block(OptConfig::NUM_THREADS);
+    wmma_gemm_kernel_opt_interleaved<false><<<grid, block, 0, stream>>>(
+        A_ptr, B_ptr, C_ptr, N, K);
+    C10_HIP_KERNEL_LAUNCH_CHECK();
+    return C;
+}
+
+torch::Tensor wmma_matmul_opt_interleaved_timed_bt(
+    torch::Tensor A, torch::Tensor B
+) {
+    TORCH_CHECK(A.is_cuda() && B.is_cuda(), "Inputs must be GPU tensors");
+    TORCH_CHECK(A.device() == B.device(), "Inputs must be on same device");
+    TORCH_CHECK(A.dtype() == torch::kFloat16 && B.dtype() == torch::kFloat16,
+                "Inputs must be float16");
+    TORCH_CHECK(A.dim() == 2 && B.dim() == 2, "Inputs must be 2D");
+    TORCH_CHECK(A.size(1) == B.size(0), "Inner dimensions must match");
+
+    const int M = A.size(0);
+    const int K = A.size(1);
+    const int N = B.size(1);
+    TORCH_CHECK((M % OptConfig::BLOCK_M) == 0,
+                "M must be a multiple of 128 (got M=", M, ")");
+    TORCH_CHECK((N % OptConfig::BLOCK_N) == 0,
+                "N must be a multiple of 128 (got N=", N, ")");
+    TORCH_CHECK((K % OptConfig::BLOCK_K) == 0,
+                "K must be a multiple of 16 (got K=", K, ")");
+
+    A = A.contiguous();
+    B = B.contiguous();
+    auto B_transposed = torch::empty(
+        {N, K}, torch::dtype(torch::kFloat16).device(B.device()));
+    auto C = torch::empty({M, N}, torch::dtype(torch::kFloat32).device(A.device()));
+    const __half* A_ptr =
+        reinterpret_cast<const __half*>(A.data_ptr<at::Half>());
+    const __half* B_ptr =
+        reinterpret_cast<const __half*>(B_transposed.data_ptr<at::Half>());
+    float* C_ptr = C.data_ptr<float>();
+    hipStream_t stream = c10::hip::getCurrentHIPStream(A.device().index()).stream();
+
+    dim3 transpose_block(FP16_TRANSPOSE_TILE, FP16_TRANSPOSE_THREADS_Y);
+    dim3 transpose_grid(
+        (N + FP16_TRANSPOSE_TILE - 1) / FP16_TRANSPOSE_TILE,
+        (K + FP16_TRANSPOSE_TILE - 1) / FP16_TRANSPOSE_TILE);
+    transpose_fp16_tiled_kernel<<<transpose_grid, transpose_block, 0, stream>>>(
+        reinterpret_cast<const __half*>(B.data_ptr<at::Half>()),
+        reinterpret_cast<__half*>(B_transposed.data_ptr<at::Half>()), K, N);
+
+    dim3 grid(N / OptConfig::BLOCK_N, M / OptConfig::BLOCK_M);
+    dim3 block(OptConfig::NUM_THREADS);
+    wmma_gemm_kernel_opt_interleaved<false, true>
+        <<<grid, block, 0, stream>>>(A_ptr, B_ptr, C_ptr, N, K);
+    C10_HIP_KERNEL_LAUNCH_CHECK();
+    return C;
+}
+
+// Diagnostic/prepacked-weight entry point.  B_transposed is a persistent
+// row-major [N,K] tensor; callers that start with ordinary [K,N] B must use the
+// timed transpose entry point above for a contract-comparable measurement.
+torch::Tensor wmma_matmul_opt_interleaved_prepacked_bt(
+    torch::Tensor A, torch::Tensor B_transposed
+) {
+    TORCH_CHECK(A.is_cuda() && B_transposed.is_cuda(),
+                "Inputs must be GPU tensors");
+    TORCH_CHECK(A.device() == B_transposed.device(),
+                "Inputs must be on same device");
+    TORCH_CHECK(A.dtype() == torch::kFloat16 &&
+                    B_transposed.dtype() == torch::kFloat16,
+                "Inputs must be float16");
+    TORCH_CHECK(A.dim() == 2 && B_transposed.dim() == 2,
+                "Inputs must be 2D");
+    TORCH_CHECK(A.size(1) == B_transposed.size(1),
+                "A and transposed B must have the same K dimension");
+
+    const int M = A.size(0);
+    const int K = A.size(1);
+    const int N = B_transposed.size(0);
+    TORCH_CHECK((M % OptConfig::BLOCK_M) == 0,
+                "M must be a multiple of 128 (got M=", M, ")");
+    TORCH_CHECK((N % OptConfig::BLOCK_N) == 0,
+                "N must be a multiple of 128 (got N=", N, ")");
+    TORCH_CHECK((K % OptConfig::BLOCK_K) == 0,
+                "K must be a multiple of 16 (got K=", K, ")");
+
+    A = A.contiguous();
+    B_transposed = B_transposed.contiguous();
+    auto C = torch::empty({M, N}, torch::dtype(torch::kFloat32).device(A.device()));
+    const __half* A_ptr =
+        reinterpret_cast<const __half*>(A.data_ptr<at::Half>());
+    const __half* B_ptr = reinterpret_cast<const __half*>(
+        B_transposed.data_ptr<at::Half>());
+    float* C_ptr = C.data_ptr<float>();
+    hipStream_t stream = c10::hip::getCurrentHIPStream(A.device().index()).stream();
+
+    dim3 grid(N / OptConfig::BLOCK_N, M / OptConfig::BLOCK_M);
+    dim3 block(OptConfig::NUM_THREADS);
+    wmma_gemm_kernel_opt_interleaved<false, true>
+        <<<grid, block, 0, stream>>>(A_ptr, B_ptr, C_ptr, N, K);
+    C10_HIP_KERNEL_LAUNCH_CHECK();
+    return C;
+}
+
+torch::Tensor wmma_matmul_opt_interleaved_packed(
+    torch::Tensor A, torch::Tensor B
+) {
+    TORCH_CHECK(A.is_cuda() && B.is_cuda(), "Inputs must be GPU tensors");
+    TORCH_CHECK(A.device() == B.device(), "Inputs must be on same device");
+    TORCH_CHECK(A.dtype() == torch::kFloat16 && B.dtype() == torch::kFloat16,
+                "Inputs must be float16");
+    TORCH_CHECK(A.dim() == 2 && B.dim() == 2, "Inputs must be 2D");
+    TORCH_CHECK(A.size(1) == B.size(0), "Inner dimensions must match");
+
+    const int M = A.size(0);
+    const int K = A.size(1);
+    const int N = B.size(1);
+    TORCH_CHECK((M % OptConfig::BLOCK_M) == 0,
+                "M must be a multiple of 128 (got M=", M, ")");
+    TORCH_CHECK((N % OptConfig::BLOCK_N) == 0,
+                "N must be a multiple of 128 (got N=", N, ")");
+    TORCH_CHECK((K % OptConfig::BLOCK_K) == 0,
+                "K must be a multiple of 16 (got K=", K, ")");
+
+    A = A.contiguous();
+    B = B.contiguous();
+    auto C = torch::empty({M, N}, torch::dtype(torch::kFloat32).device(A.device()));
+    const __half* A_ptr =
+        reinterpret_cast<const __half*>(A.data_ptr<at::Half>());
+    const __half* B_ptr =
+        reinterpret_cast<const __half*>(B.data_ptr<at::Half>());
+    float* C_ptr = C.data_ptr<float>();
+    hipStream_t stream = c10::hip::getCurrentHIPStream(A.device().index()).stream();
+
+    dim3 grid(N / OptConfig::BLOCK_N, M / OptConfig::BLOCK_M);
+    dim3 block(OptConfig::NUM_THREADS);
+    wmma_gemm_kernel_opt_interleaved<true><<<grid, block, 0, stream>>>(
+        A_ptr, B_ptr, C_ptr, N, K);
+    C10_HIP_KERNEL_LAUNCH_CHECK();
+    return C;
+}
+
+torch::Tensor wmma_matmul_opt_k32(torch::Tensor A, torch::Tensor B) {
+    TORCH_CHECK(A.is_cuda() && B.is_cuda(), "Inputs must be GPU tensors");
+    TORCH_CHECK(A.device() == B.device(), "Inputs must be on same device");
+    TORCH_CHECK(A.dtype() == torch::kFloat16 && B.dtype() == torch::kFloat16,
+                "Inputs must be float16");
+    TORCH_CHECK(A.dim() == 2 && B.dim() == 2, "Inputs must be 2D");
+    TORCH_CHECK(A.size(1) == B.size(0), "Inner dimensions must match");
+
+    const int M = A.size(0);
+    const int K = A.size(1);
+    const int N = B.size(1);
+    TORCH_CHECK((M % OptK32Config::BLOCK_M) == 0,
+                "M must be a multiple of 128 (got M=", M, ")");
+    TORCH_CHECK((N % OptK32Config::BLOCK_N) == 0,
+                "N must be a multiple of 128 (got N=", N, ")");
+    TORCH_CHECK((K % OptK32Config::BLOCK_K) == 0,
+                "K must be a multiple of 32 (got K=", K, ")");
+
+    A = A.contiguous();
+    B = B.contiguous();
+    auto C = torch::empty({M, N}, torch::dtype(torch::kFloat32).device(A.device()));
+    const __half* A_ptr =
+        reinterpret_cast<const __half*>(A.data_ptr<at::Half>());
+    const __half* B_ptr =
+        reinterpret_cast<const __half*>(B.data_ptr<at::Half>());
+    float* C_ptr = C.data_ptr<float>();
+    hipStream_t stream = c10::hip::getCurrentHIPStream(A.device().index()).stream();
+
+    dim3 grid(N / OptK32Config::BLOCK_N, M / OptK32Config::BLOCK_M);
+    dim3 block(OptK32Config::NUM_THREADS);
+    wmma_gemm_kernel_opt_k32<false><<<grid, block, 0, stream>>>(
+        A_ptr, B_ptr, C_ptr, N, K);
+    C10_HIP_KERNEL_LAUNCH_CHECK();
+    return C;
+}
+
+// Persistent-weight diagnostic matching hipEngine's preferred inference
+// contract: B is supplied once in row-major [N,K] order, so every GEMM can
+// stage both operands with aligned vector stores.  Packing is intentionally
+// outside this entry point and must be timed separately for one-shot GEMM.
+torch::Tensor wmma_matmul_opt_k32_prepacked_bt(
+    torch::Tensor A, torch::Tensor B_transposed
+) {
+    TORCH_CHECK(A.is_cuda() && B_transposed.is_cuda(),
+                "Inputs must be GPU tensors");
+    TORCH_CHECK(A.device() == B_transposed.device(),
+                "Inputs must be on same device");
+    TORCH_CHECK(A.dtype() == torch::kFloat16 &&
+                    B_transposed.dtype() == torch::kFloat16,
+                "Inputs must be float16");
+    TORCH_CHECK(A.dim() == 2 && B_transposed.dim() == 2,
+                "Inputs must be 2D");
+    TORCH_CHECK(A.size(1) == B_transposed.size(1),
+                "A and transposed B must have the same K dimension");
+
+    const int M = A.size(0);
+    const int K = A.size(1);
+    const int N = B_transposed.size(0);
+    TORCH_CHECK((M % OptK32Config::BLOCK_M) == 0,
+                "M must be a multiple of 128 (got M=", M, ")");
+    TORCH_CHECK((N % OptK32Config::BLOCK_N) == 0,
+                "N must be a multiple of 128 (got N=", N, ")");
+    TORCH_CHECK((K % OptK32Config::BLOCK_K) == 0,
+                "K must be a multiple of 32 (got K=", K, ")");
+
+    A = A.contiguous();
+    B_transposed = B_transposed.contiguous();
+    auto C = torch::empty({M, N}, torch::dtype(torch::kFloat32).device(A.device()));
+    const __half* A_ptr =
+        reinterpret_cast<const __half*>(A.data_ptr<at::Half>());
+    const __half* B_ptr = reinterpret_cast<const __half*>(
+        B_transposed.data_ptr<at::Half>());
+    float* C_ptr = C.data_ptr<float>();
+    hipStream_t stream = c10::hip::getCurrentHIPStream(A.device().index()).stream();
+
+    dim3 grid(N / OptK32Config::BLOCK_N, M / OptK32Config::BLOCK_M);
+    dim3 block(OptK32Config::NUM_THREADS);
+    wmma_gemm_kernel_opt_k32<true><<<grid, block, 0, stream>>>(
+        A_ptr, B_ptr, C_ptr, N, K);
+    C10_HIP_KERNEL_LAUNCH_CHECK();
+    return C;
+}
+
+torch::Tensor wmma_matmul_opt_k32_streamed(torch::Tensor A, torch::Tensor B) {
+    TORCH_CHECK(A.is_cuda() && B.is_cuda(), "Inputs must be GPU tensors");
+    TORCH_CHECK(A.device() == B.device(), "Inputs must be on same device");
+    TORCH_CHECK(A.dtype() == torch::kFloat16 && B.dtype() == torch::kFloat16,
+                "Inputs must be float16");
+    TORCH_CHECK(A.dim() == 2 && B.dim() == 2, "Inputs must be 2D");
+    TORCH_CHECK(A.size(1) == B.size(0), "Inner dimensions must match");
+
+    const int M = A.size(0);
+    const int K = A.size(1);
+    const int N = B.size(1);
+    TORCH_CHECK((M % OptK32Config::BLOCK_M) == 0,
+                "M must be a multiple of 128 (got M=", M, ")");
+    TORCH_CHECK((N % OptK32Config::BLOCK_N) == 0,
+                "N must be a multiple of 128 (got N=", N, ")");
+    TORCH_CHECK((K % OptK32Config::BLOCK_K) == 0,
+                "K must be a multiple of 32 (got K=", K, ")");
+
+    A = A.contiguous();
+    B = B.contiguous();
+    auto C = torch::empty({M, N}, torch::dtype(torch::kFloat32).device(A.device()));
+    const __half* A_ptr =
+        reinterpret_cast<const __half*>(A.data_ptr<at::Half>());
+    const __half* B_ptr =
+        reinterpret_cast<const __half*>(B.data_ptr<at::Half>());
+    float* C_ptr = C.data_ptr<float>();
+    hipStream_t stream = c10::hip::getCurrentHIPStream(A.device().index()).stream();
+
+    dim3 grid(N / OptK32Config::BLOCK_N, M / OptK32Config::BLOCK_M);
+    dim3 block(OptK32Config::NUM_THREADS);
+    wmma_gemm_kernel_opt_k32_streamed<<<grid, block, 0, stream>>>(
+        A_ptr, B_ptr, C_ptr, N, K);
+    C10_HIP_KERNEL_LAUNCH_CHECK();
+    return C;
+}
+
+torch::Tensor wmma_matmul_opt_k32_balanced(torch::Tensor A, torch::Tensor B) {
+    TORCH_CHECK(A.is_cuda() && B.is_cuda(), "Inputs must be GPU tensors");
+    TORCH_CHECK(A.device() == B.device(), "Inputs must be on same device");
+    TORCH_CHECK(A.dtype() == torch::kFloat16 && B.dtype() == torch::kFloat16,
+                "Inputs must be float16");
+    TORCH_CHECK(A.dim() == 2 && B.dim() == 2, "Inputs must be 2D");
+    TORCH_CHECK(A.size(1) == B.size(0), "Inner dimensions must match");
+
+    const int M = A.size(0);
+    const int K = A.size(1);
+    const int N = B.size(1);
+    TORCH_CHECK((M % OptK32Config::BLOCK_M) == 0,
+                "M must be a multiple of 128 (got M=", M, ")");
+    TORCH_CHECK((N % OptK32Config::BLOCK_N) == 0,
+                "N must be a multiple of 128 (got N=", N, ")");
+    TORCH_CHECK((K % OptK32Config::BLOCK_K) == 0,
+                "K must be a multiple of 32 (got K=", K, ")");
+
+    A = A.contiguous();
+    B = B.contiguous();
+    auto C = torch::empty({M, N}, torch::dtype(torch::kFloat32).device(A.device()));
+    const __half* A_ptr =
+        reinterpret_cast<const __half*>(A.data_ptr<at::Half>());
+    const __half* B_ptr =
+        reinterpret_cast<const __half*>(B.data_ptr<at::Half>());
+    float* C_ptr = C.data_ptr<float>();
+    hipStream_t stream = c10::hip::getCurrentHIPStream(A.device().index()).stream();
+
+    dim3 grid(N / OptK32Config::BLOCK_N, M / OptK32Config::BLOCK_M);
+    dim3 block(OptK32Config::NUM_THREADS);
+    wmma_gemm_kernel_opt_k32_balanced<<<grid, block, 0, stream>>>(
+        A_ptr, B_ptr, C_ptr, N, K);
+    C10_HIP_KERNEL_LAUNCH_CHECK();
+    return C;
+}
+
+torch::Tensor wmma_matmul_opt_128x64_k32(torch::Tensor A, torch::Tensor B) {
+    TORCH_CHECK(A.is_cuda() && B.is_cuda(), "Inputs must be GPU tensors");
+    TORCH_CHECK(A.device() == B.device(), "Inputs must be on same device");
+    TORCH_CHECK(A.dtype() == torch::kFloat16 && B.dtype() == torch::kFloat16,
+                "Inputs must be float16");
+    TORCH_CHECK(A.dim() == 2 && B.dim() == 2, "Inputs must be 2D");
+    TORCH_CHECK(A.size(1) == B.size(0), "Inner dimensions must match");
+
+    const int M = A.size(0);
+    const int K = A.size(1);
+    const int N = B.size(1);
+    TORCH_CHECK((M % Opt128x64K32Config::BLOCK_M) == 0,
+                "M must be a multiple of 128 (got M=", M, ")");
+    TORCH_CHECK((N % Opt128x64K32Config::BLOCK_N) == 0,
+                "N must be a multiple of 64 (got N=", N, ")");
+    TORCH_CHECK((K % Opt128x64K32Config::BLOCK_K) == 0,
+                "K must be a multiple of 32 (got K=", K, ")");
+
+    A = A.contiguous();
+    B = B.contiguous();
+    auto C = torch::empty({M, N}, torch::dtype(torch::kFloat32).device(A.device()));
+    const auto* A_ptr = reinterpret_cast<const raw_f16_128x64*>(
+        A.data_ptr<at::Half>());
+    const auto* B_ptr = reinterpret_cast<const raw_f16_128x64*>(
+        B.data_ptr<at::Half>());
+    float* C_ptr = C.data_ptr<float>();
+    hipStream_t stream = c10::hip::getCurrentHIPStream(A.device().index()).stream();
+
+    dim3 grid(N / Opt128x64K32Config::BLOCK_N,
+              M / Opt128x64K32Config::BLOCK_M);
+    dim3 block(Opt128x64K32Config::NUM_THREADS);
+    wmma_gemm_kernel_opt_128x64_k32<<<grid, block, 0, stream>>>(
+        A_ptr, B_ptr, C_ptr, N, K);
+    C10_HIP_KERNEL_LAUNCH_CHECK();
+    return C;
+}
+
+torch::Tensor wmma_matmul_opt_raw_k32(torch::Tensor A, torch::Tensor B) {
+    TORCH_CHECK(A.is_cuda() && B.is_cuda(), "Inputs must be GPU tensors");
+    TORCH_CHECK(A.device() == B.device(), "Inputs must be on same device");
+    TORCH_CHECK(A.dtype() == torch::kFloat16 && B.dtype() == torch::kFloat16,
+                "Inputs must be float16");
+    TORCH_CHECK(A.dim() == 2 && B.dim() == 2, "Inputs must be 2D");
+    TORCH_CHECK(A.size(1) == B.size(0), "Inner dimensions must match");
+
+    const int M = A.size(0);
+    const int K = A.size(1);
+    const int N = B.size(1);
+    TORCH_CHECK((M % OptRawK32Config::BLOCK_M) == 0,
+                "M must be a multiple of 128 (got M=", M, ")");
+    TORCH_CHECK((N % OptRawK32Config::BLOCK_N) == 0,
+                "N must be a multiple of 128 (got N=", N, ")");
+    TORCH_CHECK((K % OptRawK32Config::BLOCK_K) == 0,
+                "K must be a multiple of 32 (got K=", K, ")");
+
+    A = A.contiguous();
+    B = B.contiguous();
+    auto C = torch::empty({M, N}, torch::dtype(torch::kFloat32).device(A.device()));
+    const auto* A_ptr = reinterpret_cast<const raw_f16_k32*>(
+        A.data_ptr<at::Half>());
+    const auto* B_ptr = reinterpret_cast<const raw_f16_k32*>(
+        B.data_ptr<at::Half>());
+    float* C_ptr = C.data_ptr<float>();
+    hipStream_t stream = c10::hip::getCurrentHIPStream(A.device().index()).stream();
+
+    dim3 grid(N / OptRawK32Config::BLOCK_N,
+              M / OptRawK32Config::BLOCK_M);
+    dim3 block(OptRawK32Config::NUM_THREADS);
+    wmma_gemm_kernel_opt_raw_k32<<<grid, block, 0, stream>>>(
+        A_ptr, B_ptr, C_ptr, N, K);
+    C10_HIP_KERNEL_LAUNCH_CHECK();
+    return C;
+}
+
+torch::Tensor wmma_matmul_single_wave(torch::Tensor A, torch::Tensor B) {
+    TORCH_CHECK(A.is_cuda() && B.is_cuda(), "Inputs must be GPU tensors");
+    TORCH_CHECK(A.device() == B.device(), "Inputs must be on same device");
+    TORCH_CHECK(A.dtype() == torch::kFloat16 && B.dtype() == torch::kFloat16,
+                "Inputs must be float16");
+    TORCH_CHECK(A.dim() == 2 && B.dim() == 2, "Inputs must be 2D");
+    TORCH_CHECK(A.size(1) == B.size(0), "Inner dimensions must match");
+
+    const int M = A.size(0);
+    const int K = A.size(1);
+    const int N = B.size(1);
+    TORCH_CHECK((M % SingleWaveConfig::BLOCK_M) == 0,
+                "M must be a multiple of 32 (got M=", M, ")");
+    TORCH_CHECK((N % SingleWaveConfig::BLOCK_N) == 0,
+                "N must be a multiple of 64 (got N=", N, ")");
+    TORCH_CHECK((K % SingleWaveConfig::BLOCK_K) == 0,
+                "K must be a multiple of 16 (got K=", K, ")");
+
+    A = A.contiguous();
+    B = B.contiguous();
+    auto C = torch::empty({M, N}, torch::dtype(torch::kFloat32).device(A.device()));
+    const __half* A_ptr =
+        reinterpret_cast<const __half*>(A.data_ptr<at::Half>());
+    const __half* B_ptr =
+        reinterpret_cast<const __half*>(B.data_ptr<at::Half>());
+    float* C_ptr = C.data_ptr<float>();
+    hipStream_t stream = c10::hip::getCurrentHIPStream(A.device().index()).stream();
+
+    dim3 grid(N / SingleWaveConfig::BLOCK_N,
+              M / SingleWaveConfig::BLOCK_M);
+    dim3 block(SingleWaveConfig::NUM_THREADS);
+    wmma_gemm_kernel_single_wave<<<grid, block, 0, stream>>>(
+        A_ptr, B_ptr, C_ptr, N, K);
+    C10_HIP_KERNEL_LAUNCH_CHECK();
+    return C;
+}
+
+torch::Tensor wmma_matmul_4wave_k32(torch::Tensor A, torch::Tensor B) {
+    TORCH_CHECK(A.is_cuda() && B.is_cuda(), "Inputs must be GPU tensors");
+    TORCH_CHECK(A.device() == B.device(), "Inputs must be on same device");
+    TORCH_CHECK(A.dtype() == torch::kFloat16 && B.dtype() == torch::kFloat16,
+                "Inputs must be float16");
+    TORCH_CHECK(A.dim() == 2 && B.dim() == 2, "Inputs must be 2D");
+    TORCH_CHECK(A.size(1) == B.size(0), "Inner dimensions must match");
+
+    const int M = A.size(0);
+    const int K = A.size(1);
+    const int N = B.size(1);
+    TORCH_CHECK((M % FourWaveK32Config::BLOCK_M) == 0,
+                "M must be a multiple of 128 (got M=", M, ")");
+    TORCH_CHECK((N % FourWaveK32Config::BLOCK_N) == 0,
+                "N must be a multiple of 128 (got N=", N, ")");
+    TORCH_CHECK((K % FourWaveK32Config::BLOCK_K) == 0,
+                "K must be a multiple of 32 (got K=", K, ")");
+
+    A = A.contiguous();
+    B = B.contiguous();
+    auto C = torch::empty({M, N}, torch::dtype(torch::kFloat32).device(A.device()));
+    const __half* A_ptr =
+        reinterpret_cast<const __half*>(A.data_ptr<at::Half>());
+    const __half* B_ptr =
+        reinterpret_cast<const __half*>(B.data_ptr<at::Half>());
+    float* C_ptr = C.data_ptr<float>();
+    hipStream_t stream = c10::hip::getCurrentHIPStream(A.device().index()).stream();
+
+    dim3 grid(N / FourWaveK32Config::BLOCK_N,
+              M / FourWaveK32Config::BLOCK_M);
+    dim3 block(FourWaveK32Config::NUM_THREADS);
+    wmma_gemm_kernel_4wave_k32<<<grid, block, 0, stream>>>(
+        A_ptr, B_ptr, C_ptr, N, K);
     C10_HIP_KERNEL_LAUNCH_CHECK();
     return C;
 }
@@ -2124,7 +2683,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("matmul_hilbert", &wmma_matmul_hilbert, "WMMA GEMM with Hilbert tile mapping, cooperative loading, vectorized epilogue");
     m.def("matmul_kunroll", &wmma_matmul_kunroll, "WMMA GEMM with K-unrolling (2x fewer syncs)");
     m.def("matmul_native", &wmma_matmul_native, "WMMA GEMM gfx1151-native (explicit intrinsics)");
-    m.def("matmul_zerocopy", &wmma_matmul_zerocopy, "WMMA GEMM with swizzled B and zero-copy stores");
+    m.def("matmul_zerocopy", &wmma_matmul_zerocopy, "WMMA GEMM historical vector-load B variant");
     m.def("matmul_tiled", &wmma_matmul_tiled, "WMMA GEMM with configurable tile shape");
     m.def("matmul_quad", &wmma_matmul_quad, "WMMA GEMM with quad-buffering (experimental)");
     m.def("matmul_highOcc", &wmma_matmul_highOcc, "WMMA GEMM high-occupancy (8 waves target)");
@@ -2134,7 +2693,21 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("matmul_xor_optimized", &wmma_matmul_xor_optimized, "WMMA GEMM with corrected XOR swizzle and fragment layout (from wmma_optimizations.hpp)");
     m.def("matmul_coop", &wmma_matmul_coop, "WMMA GEMM with cooperative loading (half threads load A, half load B)");
     m.def("matmul_pingpong", &wmma_matmul_pingpong, "WMMA GEMM with HipKittens-style ping-pong wave scheduling");
-    m.def("matmul_opt", &wmma_matmul_opt, "WMMA GEMM optimized (256x128 tiles, 4x4 warp tiling, vectorized epilogue)");
+    m.def("matmul_opt", &wmma_matmul_opt, "Experimental WMMA GEMM (128x128 tile, 2x4 WMMA tiles per wave)");
+    m.def("matmul_opt16", &wmma_matmul_opt16, "Experimental WMMA GEMM (256x128 tile, 4x4 WMMA tiles per wave)");
+    m.def("matmul_direct_lds", &wmma_matmul_direct_lds, "Experimental WMMA GEMM with direct row-major LDS panels");
+    m.def("matmul_opt_interleaved", &wmma_matmul_opt_interleaved, "Experimental record-shape WMMA GEMM with interleaved global prefetch");
+    m.def("matmul_opt_interleaved_timed_bt", &wmma_matmul_opt_interleaved_timed_bt, "Experimental interleaved WMMA GEMM with a timed B transpose and vector-only LDS staging");
+    m.def("matmul_opt_interleaved_prepacked_bt", &wmma_matmul_opt_interleaved_prepacked_bt, "Diagnostic interleaved WMMA GEMM accepting persistent row-major [N,K] weights");
+    m.def("matmul_opt_k32", &wmma_matmul_opt_k32, "Experimental record-shape WMMA GEMM with two K slices per barrier");
+    m.def("matmul_opt_k32_prepacked_bt", &wmma_matmul_opt_k32_prepacked_bt, "Diagnostic K32 WMMA GEMM accepting persistent row-major [N,K] weights");
+    m.def("matmul_opt_k32_streamed", &wmma_matmul_opt_k32_streamed, "Experimental K32 WMMA GEMM with streamed B fragment lifetimes");
+    m.def("matmul_opt_k32_balanced", &wmma_matmul_opt_k32_balanced, "Experimental K32 WMMA GEMM with two A-loader waves and six B-loader waves");
+    m.def("matmul_opt_128x64_k32", &wmma_matmul_opt_128x64_k32, "Experimental low-live-state 128x64 WMMA GEMM with two K slices per barrier");
+    m.def("matmul_opt_raw_k32", &wmma_matmul_opt_raw_k32, "Experimental raw-builtin 128x128 WMMA GEMM with two K slices per barrier");
+    m.def("matmul_single_wave", &wmma_matmul_single_wave, "Experimental one-wave 32x64 WMMA GEMM without inter-wave barrier waits");
+    m.def("matmul_4wave_k32", &wmma_matmul_4wave_k32, "Experimental four-wave 128x128x32 WMMA GEMM derived from the rocBLAS gfx1151 resource geometry");
+    m.def("matmul_opt_interleaved_packed", &wmma_matmul_opt_interleaved_packed, "Experimental interleaved WMMA GEMM with DPP-packed B staging");
     
     // New BLAS-style GEMM functions (C = alpha * A × B + beta * C)
     m.def("gemm", &wmma_gemm, 
@@ -2154,4 +2727,3 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           py::arg("alpha") = 1.0, py::arg("beta") = 0.0,
           py::arg("C") = py::none());
 }
-
