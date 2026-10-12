@@ -30,6 +30,11 @@ and a long historical notebook. They do not carry equal authority.
 bandwidth-bound attention experiment used by Ember. Its shapes, bottlenecks,
 and measurements must not be presented as GEMM results from `wmma-ops`.
 
+[Quantized-weight decode](quantized_weight_decode_gfx1151.md) records the 4- and
+6-bit weight formats and dequant techniques read from halogen-flash-server's
+gfx1151 kernels, checked against reference weights. It contains layout and
+arithmetic findings, not throughput measurements.
+
 ## Historical material
 
 [WMMA development notes](WMMA_DEVELOPMENT_NOTES.md) is an append-only lab
