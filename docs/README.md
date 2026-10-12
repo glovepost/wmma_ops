@@ -32,7 +32,9 @@ and measurements must not be presented as GEMM results from `wmma-ops`.
 
 [Quantized-weight decode](quantized_weight_decode_gfx1151.md) records the 4- and
 6-bit weight formats and dequant techniques read from halogen-flash-server's
-gfx1151 kernels, checked against reference weights. It contains layout and
+gfx1151 kernels, checked against reference weights, and the plan to move our
+abliterated Qwen3.8-Flash-Next onto Halogen v2. Decoders are in
+`tools/halogen_v2/`. It contains layout and
 arithmetic findings, not throughput measurements.
 
 ## Historical material

@@ -9,8 +9,17 @@ WMMA GEMM. Nothing here is a `wmma-ops` measurement.
 for Strix Halo). The device code keeps its symbol names, so each claim below names
 the kernel it was read from. Peonist's EULA (`LICENSE.md` in their repo) does not
 prohibit reverse engineering and asks that derived kernels or source not be
-redistributed as one's own. This file therefore describes formats and techniques and
-does not reproduce their kernels.
+redistributed as one's own. The disassembly is kept in
+[`tools/halogen_v2/disasm/`](../tools/halogen_v2/disasm/) for internal reference,
+credited to Peonist. The NumPy decoders in [`tools/halogen_v2/`](../tools/halogen_v2/)
+are our own, written from it.
+
+**Why**: our production Qwen3.8-Flash-Next is an abliterated build, published as
+`otheru/Qwen3.8-Flash-Next-Strix-Halo-GGUF`. The pipeline is `akadmin/halogen-abliterate`.
+Today it is a llama.cpp GGUF that Halogen 0.12.1's `convert` repacks into the old
+w4b-style layout, and it serves on hermes. Upstream's v2 checkpoint (Halogen ≥ 0.15)
+is a different quantization whose map is not published. This investigation decoded
+v2 so the abliteration can move onto it (see [Abliteration on v2](#abliteration-on-v2)).
 
 **Method**: disassembled with `llvm-objdump --mcpu=gfx1151`, then each format was
 checked by decoding tensors from their published v2 checkpoint
@@ -141,6 +150,46 @@ Checked: correlation 0.99968, relative error 2.5%.
 - **Reusing exllamav3 needs a re-tile, not a new encoder.** Its `mul1` K=4 encoder
   produces the right codes; only the tile order and word packing differ.
 
+## Abliteration on v2
+
+The refusal edit is a rank-1 projection on the residual-stream writers,
+`W' = W − λ·r·rᵀ·W`, with λ_attn = 3.5 across all 48 layers. It touches three
+families:
+
+| family | v2 format | size in v2 |
+|---|---|---|
+| routed experts `down_proj` | `i4r` | ~19.3 GiB |
+| `self_attn.o_proj`, `linear_attn.out_proj` | `ht4` | ~0.35 GiB |
+| `shared_expert.down_proj` | `ht4` | ~0.04 GiB |
+
+Everything else, about 2/3 of the bytes including all of `gate_up`, could be copied
+byte-for-byte from v2. That keeps Peonist's calibrated quantization wherever the
+edit does not reach. Plan:
+
+1. **Edit in the original basis.** Decode the tensor, apply the edit to the
+   abliterated BF16 (archived on hermes as `Qwen3.8-Flash-Next-abliterated-BF16.gguf`),
+   then `rotate` it with v2's own `suh`/`svh`. The sign vectors are shared across all
+   512 experts, so the new tensors stay consistent with the untouched ones.
+2. **`i4r`**: quantize each 128-group to `(q − 8)·s` with a signed fp16 scale.
+   Round-to-nearest is enough to load. GPTQ/LDLQ on rotated activations would be
+   needed to match v2's quality.
+3. **`ht4`**: trellis-encode with exllamav3's `mul1`, K=4 encoder, then re-tile into
+   the layout above. The tensors are small, so Viterbi cost does not matter.
+4. **Write the table**: keep `qparam` from v2's entry, recompute the XOR32 checksum
+   (see Container notes), and pair the result with the stock
+   `qwen38-flash-next-ngram.hgn`.
+5. **Validate** with `halogen-tools verify`, `halogen ppl` against stock v2, and the
+   halogen-abliterate refusal and over-trigger gate. The currently deployed fp8-table
+   build has not been through that gate.
+
+## Container notes
+
+- Header: `HGN1`, u32 version 2, u64 tensor count, u64 table offset (0x68), u64 data
+  offset, u64 total size, char[64] model id.
+- Table entries are 160 bytes: char[96] name, u32 fmt, u32 ndim, u64 dims[4],
+  u64 offset, u64 size, u32 checksum, u32 qparam.
+- `halogen-abliterate`'s `tools/native_fp8/validate.py` already uses this checksum.
+
 ## Not established
 
 - The upper half of each table entry's last 64-bit field is a format parameter
@@ -150,3 +199,5 @@ Checked: correlation 0.99968, relative error 2.5%.
 - `q4c` and `q8g64` were identified from kernel names only and not decoded here.
 - No throughput was measured. These are layout and arithmetic findings, not
   performance claims.
+- No encoder exists yet, and nothing has been written in v2 format, so loader-side
+  checks beyond `verify` (n-gram table pairing, sidecar detection) are untested.
